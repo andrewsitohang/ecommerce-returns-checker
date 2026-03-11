@@ -1,0 +1,43 @@
+# Environment and secrets
+.env
+.env.*
+!.env.public.example
+!.env.example
+
+# Airflow runtime artifacts
+logs/
+airflow-webserver.pid
+airflow-scheduler.pid
+
+# Data outputs/local artifacts
+data/
+
+# Python caches/build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Docker/local overrides
+docker-compose.override.yml
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
