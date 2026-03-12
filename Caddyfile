@@ -8,3 +8,8 @@
         X-Frame-Options "SAMEORIGIN"
     }
 }
+
+{$METABASE_PUBLIC_DOMAIN} {
+    reverse_proxy metabase:3000
+    encode gzip
+}

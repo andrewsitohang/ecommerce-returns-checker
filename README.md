@@ -101,6 +101,31 @@ Airflow dapat diakses melalui:
 https://PUBLIC_DOMAIN
 ```
 
+### 5) Metabase (gratis, near realtime)
+Metabase juga disiapkan di stack public.
+
+Tambahkan di `.env`:
+- `METABASE_PUBLIC_DOMAIN` (contoh `metabase.company.com`)
+- `METABASE_PUBLIC_BASE_URL` (contoh `https://metabase.company.com`)
+- `METABASE_ENCRYPTION_SECRET_KEY` (acak panjang)
+
+Lalu restart stack:
+```bash
+docker compose -f docker-compose.public.yml up -d
+```
+
+Akses:
+```bash
+https://METABASE_PUBLIC_DOMAIN
+```
+
+Saat first setup di Metabase:
+- Add database -> PostgreSQL
+- Host: `postgres`
+- Port: `5432`
+- Database: sesuai `DB_NAME`
+- Username/password: sesuai `DB_USER` / `DB_PASSWORD`
+
 ### Catatan keamanan penting
 - Postgres tidak diekspos ke internet pada mode public (`ports: []`).
 - Jangan gunakan default credential.
