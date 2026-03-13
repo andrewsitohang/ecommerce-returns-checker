@@ -24,7 +24,7 @@ services:
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "${DB_USER:-airflow}"]
+      test: ["CMD-SHELL", "pg_isready -U admin -d returns_db"]
       interval: 10s
       retries: 5
       start_period: 5s
