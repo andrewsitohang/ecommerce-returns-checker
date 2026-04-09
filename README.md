@@ -1,6 +1,6 @@
 # Returns Analytics from API (Weekly x Area x Expedition)
 
-Project ini mengambil data dari 2 API dan menyiapkan dataset retur mingguan siap Tableau.
+Project ini mengambil data dari API1 dan sumber SPX (API2 atau export web SPX) lalu menyiapkan dataset retur mingguan siap Tableau.
 
 ## API
 1. API1 (logistic orders)
@@ -12,6 +12,12 @@ https://dtrace.id/api/senesa/wallet/logistic-orders
 ```
 https://dtrace.id/api/spx/orders
 ```
+
+3. Alternatif API2: export web SPX via browser automation
+- login ke `spx.co.id`
+- buka halaman `Pelacakan Pesanan`
+- klik `Unduh`
+- parse file hasil download
 
 ## Output (ke DB, layer terpisah)
 Data ditulis ke Postgres dengan schema:
@@ -48,6 +54,15 @@ API2_END_DATE=2026-02-21
 API2_LIMIT=100
 API2_TOKEN=YOUR_TOKEN_IF_REQUIRED
 
+# jika API2 diganti scraping web
+API2_SOURCE_MODE=spx_web
+SPX_WEB_LOGIN_URL=https://spx.co.id/
+SPX_WEB_TRACKING_URL=https://spx.co.id/spx-admin/order/trackings
+SPX_WEB_USERNAME=YOUR_SPX_USERNAME
+SPX_WEB_PASSWORD=YOUR_SPX_PASSWORD
+SPX_WEB_HEADLESS=true
+SPX_WEB_DOWNLOAD_DIR=/opt/airflow/data/spx_downloads
+
 DB_HOST=postgres
 DB_PORT=5432
 DB_NAME=returns_db
@@ -66,6 +81,38 @@ docker compose up -d
 ```
 
 4. Trigger DAG `returns_api_weekly` di Airflow UI.
+
+## Test Scraper SPX di Local
+Mode ini disiapkan untuk percobaan lokal lebih dulu, tanpa menunggu integrasi penuh ke container Airflow.
+
+1. Install dependency lokal:
+```bash
+pip install pandas openpyxl playwright
+playwright install chromium
+```
+
+2. Set env untuk SPX web:
+```bash
+$env:API2_SOURCE_MODE="spx_web"
+$env:SPX_WEB_LOGIN_URL="https://spx.co.id/"
+$env:SPX_WEB_TRACKING_URL="https://spx.co.id/spx-admin/order/trackings"
+$env:SPX_WEB_USERNAME="YOUR_SPX_USERNAME"
+$env:SPX_WEB_PASSWORD="YOUR_SPX_PASSWORD"
+```
+
+3. Jalankan helper lokal:
+```bash
+python scripts/test_spx_web_export.py --start-date 2026-03-01 --end-date 2026-03-01 --headed
+```
+
+Catatan:
+- script akan download file export SPX, parse, lalu mengubahnya ke format yang sama dengan sumber API2.
+- selector form/login/filter dibuat configurable lewat env karena UI SPX bisa berubah.
+- untuk Airflow di Docker, rebuild image setelah perubahan dependency:
+```bash
+docker compose build --no-cache airflow-webserver airflow-scheduler airflow-init
+docker compose up -d --force-recreate airflow-webserver airflow-scheduler airflow-init
+```
 
 ## Publish ke Public (HTTPS)
 Gunakan mode public hanya di server/VPS (bukan laptop lokal) dengan domain aktif.
@@ -129,12 +176,13 @@ Saat first setup di Metabase:
 ### Catatan keamanan penting
 - Postgres tidak diekspos ke internet pada mode public (`ports: []`).
 - Jangan gunakan default credential.
-- Untuk produksi jangka panjang, disarankan build custom image Airflow (hindari `_PIP_ADDITIONAL_REQUIREMENTS` saat startup).
+- Project ini sekarang memakai `Dockerfile.airflow` agar dependency Python dan browser Playwright terpasang saat build image, bukan saat container start.
 
 ## Mapping Retur
 Return flag ditentukan oleh:
 - API1: `status_name` mengandung `RETURN`/`RETUR`
 - API2: `returning_start_time` atau `returned_time` terisi
+- SPX web export: `Waktu pengembalian ke pengirim`, `Alasan pengiriman gagal`, atau status pengiriman yang menunjukkan retur/gagal
 
 ## Catatan
 Jika API butuh autentikasi tambahan (cookie, header khusus), beri tahu saya agar saya tambah di DAG.

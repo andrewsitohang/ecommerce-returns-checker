@@ -13,6 +13,8 @@ import psycopg2
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+from spx_web_source import fetch_spx_export_records
+
 RAW_SCHEMA = "raw"
 STAGING_SCHEMA = "staging"
 MART_SCHEMA = "mart"
@@ -241,11 +243,45 @@ def _extract_api_list(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
+def _get_api2_source_mode() -> str:
+    return os.getenv("API2_SOURCE_MODE", "api").strip().lower()
+
+
+def _fetch_api2_source_data(start_date: str, end_date: str) -> Dict[str, Any]:
+    source_mode = _get_api2_source_mode()
+    if source_mode == "spx_web":
+        records = fetch_spx_export_records(
+            start_date,
+            end_date,
+            headless=os.getenv("SPX_WEB_HEADLESS", "true").lower() == "true",
+            keep_download=False,
+            output_dir=os.getenv("SPX_WEB_DOWNLOAD_DIR"),
+        )
+        return {"source_mode": source_mode, "data": records}
+
+    api2_url = _env("API2_URL")
+    api2_token = os.getenv("API2_TOKEN", "")
+    api2_params = {
+        "page": int(os.getenv("API2_PAGE", "1")),
+        "limit": int(os.getenv("API2_LIMIT", "100")),
+        "start_date": os.getenv("API2_START_DATE", start_date),
+        "end_date": os.getenv("API2_END_DATE", end_date),
+    }
+    api2_headers = {"Authorization": api2_token} if api2_token else {}
+    api2_payloads = _fetch_paged(api2_url, api2_params, api2_headers)
+    return {"source_mode": source_mode, "data": api2_payloads}
+
+
+def _decode_api2_payload_blob(payload_text: str) -> tuple[str, List[Dict[str, Any]]]:
+    payload_obj = json.loads(payload_text)
+    if isinstance(payload_obj, dict) and "source_mode" in payload_obj and "data" in payload_obj:
+        return str(payload_obj["source_mode"]), list(payload_obj["data"])
+    return "api", list(payload_obj)
+
+
 def fetch_api_raw() -> None:
     api1_url = _env("API1_URL")
-    api2_url = _env("API2_URL")
     api1_token = os.getenv("API1_TOKEN", "")
-    api2_token = os.getenv("API2_TOKEN", "")
 
     q_start, q_end = _current_quarter_range()
 
@@ -258,18 +294,10 @@ def fetch_api_raw() -> None:
         "start_date": os.getenv("API1_START_DATE", q_start),
         "end_date": os.getenv("API1_END_DATE", q_end),
     }
-    api2_params = {
-        "page": int(os.getenv("API2_PAGE", "1")),
-        "limit": int(os.getenv("API2_LIMIT", "100")),
-        "start_date": os.getenv("API2_START_DATE", q_start),
-        "end_date": os.getenv("API2_END_DATE", q_end),
-    }
-
     api1_headers = {"Authorization": api1_token} if api1_token else {}
-    api2_headers = {"Authorization": api2_token} if api2_token else {}
 
     api1_payloads = _fetch_paged(api1_url, api1_params, api1_headers)
-    api2_payloads = _fetch_paged(api2_url, api2_params, api2_headers)
+    api2_payloads = _fetch_api2_source_data(q_start, q_end)
 
     # persist raw payloads to DB (raw schema)
     db_host = _env("DB_HOST")
@@ -407,6 +435,27 @@ def _normalize_api2_orders(payloads: List[Dict[str, Any]]) -> List[Dict[str, Any
     return items
 
 
+def _normalize_api2_source_data(source_mode: str, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if source_mode == "spx_web":
+        records = []
+        for record in data:
+            normalized = dict(record)
+            normalized["return_flag"] = int(normalized.get("return_flag", 0))
+            normalized["order_value"] = _to_number(normalized.get("order_value"))
+            normalized["cod_value"] = _to_number(normalized.get("cod_value"))
+            normalized["shipping_fee"] = _to_number(normalized.get("shipping_fee"))
+            normalized["service_type"] = _normalize_service_type(normalized.get("service_type"))
+            normalized["return_reason"] = _normalize_text(normalized.get("return_reason"), fallback="No Reason Provided")
+            normalized["province"] = _normalize_text(normalized.get("province"))
+            normalized["city"] = _normalize_text(normalized.get("city"))
+            normalized["payment_method"] = _normalize_text(normalized.get("payment_method"))
+            normalized["cod_type"] = _normalize_text(normalized.get("cod_type"), fallback="NON-COD")
+            normalized["expedition"] = _normalize_text(normalized.get("expedition"), fallback="SPX")
+            records.append(normalized)
+        return records
+    return _normalize_api2_orders(data)
+
+
 def build_returns_mart() -> None:
     db_host = _env("DB_HOST")
     db_port = _env("DB_PORT")
@@ -430,11 +479,11 @@ def build_returns_mart() -> None:
     cur.execute(f'SELECT payload FROM "{RAW_SCHEMA}"."{RAW_API1_TABLE}" ORDER BY run_ts DESC LIMIT 1')
     api1_payloads = json.loads(cur.fetchone()[0])
     cur.execute(f'SELECT payload FROM "{RAW_SCHEMA}"."{RAW_API2_TABLE}" ORDER BY run_ts DESC LIMIT 1')
-    api2_payloads = json.loads(cur.fetchone()[0])
+    api2_source_mode, api2_payloads = _decode_api2_payload_blob(cur.fetchone()[0])
     cur.close()
 
     api1_orders = _normalize_api1_orders(api1_payloads)
-    api2_orders = _normalize_api2_orders(api2_payloads)
+    api2_orders = _normalize_api2_source_data(api2_source_mode, api2_payloads)
     returns_raw = pd.DataFrame(api1_orders + api2_orders)
 
     # staging tables
