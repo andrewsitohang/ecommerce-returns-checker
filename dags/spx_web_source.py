@@ -257,7 +257,7 @@ def _click_export_result_download(page: Any, timeout_ms: int) -> None:
         "Mengekspor Paket",
         "Unduh",
     ]
-    _wait_for_any_visible_text(page, ready_texts, timeout_ms)
+    _wait_for_any_visible_text(page, ready_texts, min(timeout_ms, 15000))
 
     buttons = page.locator("button:has-text('Unduh'), a:has-text('Unduh')")
     deadline = time.time() + (timeout_ms / 1000.0)
@@ -274,15 +274,26 @@ def _click_export_result_download(page: Any, timeout_ms: int) -> None:
                     visible_buttons.append(candidate)
             except Exception:
                 continue
-        if len(visible_buttons) >= 2:
-            visible_buttons[-1].click()
+        if visible_buttons:
+            button = visible_buttons[-1]
+            try:
+                button.scroll_into_view_if_needed()
+            except Exception:
+                pass
+            try:
+                button.click(force=True)
+            except Exception:
+                button.evaluate("(el) => el.click()")
             return
         time.sleep(1)
     raise TimeoutError("Unable to find export result download button after opening SPX export panel.")
 
 
 def _click_successful_export_download(page: Any, timeout_ms: int) -> bool:
-    _wait_for_any_visible_text(page, ["Ekspor Pelacakan Paket Berhasil"], timeout_ms)
+    try:
+        _wait_for_any_visible_text(page, ["Ekspor Pelacakan Paket Berhasil"], min(timeout_ms, 10000))
+    except Exception:
+        return False
     success_buttons = page.locator(
         "xpath=(//*[contains(@class,'desc') and contains(normalize-space(.), 'Ekspor Pelacakan Paket Berhasil')]"
         "/ancestor::*[contains(@class,'content')][1]//*[self::button or self::a][contains(normalize-space(.), 'Unduh')])"
