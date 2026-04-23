@@ -144,6 +144,48 @@ def _selector_candidates(env_name: str, defaults: List[str]) -> List[str]:
     return [item.strip() for item in configured.split(",") if item.strip()]
 
 
+def _set_input_value(locator: Any, value: str) -> None:
+    locator.scroll_into_view_if_needed()
+    try:
+        locator.click()
+    except Exception:
+        pass
+    try:
+        locator.fill(value)
+        return
+    except Exception:
+        pass
+    try:
+        locator.evaluate(
+            """(el, val) => {
+                el.value = val;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('blur', { bubbles: true }));
+            }""",
+            value,
+        )
+        return
+    except Exception:
+        pass
+    locator.press("Control+A")
+    locator.type(value)
+
+
+def _fill_first_matching(page: Any, selectors: List[str], value: str, timeout_ms: int) -> str:
+    last_error: Optional[Exception] = None
+    per_selector_timeout = max(2000, timeout_ms // max(len(selectors), 1))
+    for selector in selectors:
+        locator = page.locator(selector).first
+        try:
+            locator.wait_for(state="visible", timeout=per_selector_timeout)
+            _set_input_value(locator, value)
+            return selector
+        except Exception as exc:
+            last_error = exc
+    raise TimeoutError(f"No visible input found for selectors: {selectors}") from last_error
+
+
 def _write_debug_artifacts(page: Any, output_dir: Path, prefix: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -537,9 +579,26 @@ def fetch_spx_export_records(
             "text=Nomer Resi",
         ],
     )
-    start_date_selector = os.getenv("SPX_WEB_START_DATE_SELECTOR", "")
-    end_date_selector = os.getenv("SPX_WEB_END_DATE_SELECTOR", "")
-    apply_selector = os.getenv("SPX_WEB_APPLY_FILTER_SELECTOR", "")
+    start_date_selectors = _selector_candidates(
+        "SPX_WEB_START_DATE_SELECTOR",
+        [
+            "xpath=(//input[contains(@value,'/')])[1]",
+            "xpath=(//input[@type='text'])[2]",
+            "xpath=(//input[contains(@placeholder,'Tanggal')])[1]",
+        ],
+    )
+    end_date_selectors = _selector_candidates(
+        "SPX_WEB_END_DATE_SELECTOR",
+        [
+            "xpath=(//input[contains(@value,'/')])[2]",
+            "xpath=(//input[@type='text'])[3]",
+            "xpath=(//input[contains(@placeholder,'Tanggal')])[2]",
+        ],
+    )
+    apply_selectors = _selector_candidates(
+        "SPX_WEB_APPLY_FILTER_SELECTOR",
+        ["button:has-text('Cari')"],
+    )
     timeout_ms = int(os.getenv("SPX_WEB_TIMEOUT_MS", "120000"))
 
     target_dir_ctx = tempfile.TemporaryDirectory() if output_dir is None else None
@@ -635,12 +694,23 @@ def fetch_spx_export_records(
                 f"SPX login did not complete after retries. Still on URL: {page.url}. Debug files saved under {download_dir}."
             )
 
-        if start_date_selector and end_date_selector:
-            page.locator(start_date_selector).first.fill(_to_date_text(start_date))
-            page.locator(end_date_selector).first.fill(_to_date_text(end_date))
-            if apply_selector:
-                page.locator(apply_selector).first.click()
-                _wait_for_page_ready(page, timeout_ms)
+        if start_date_selectors and end_date_selectors:
+            try:
+                used_start = _fill_first_matching(page, start_date_selectors, _to_date_text(start_date), timeout_ms)
+                used_end = _fill_first_matching(page, end_date_selectors, _to_date_text(end_date), timeout_ms)
+                try:
+                    _wait_for_first_visible(page, apply_selectors, timeout_ms).click()
+                    _wait_for_page_ready(page, timeout_ms)
+                except Exception:
+                    pass
+            except Exception as exc:
+                _write_debug_artifacts(page, download_dir, "spx_date_filter_debug")
+                raise RuntimeError(
+                    f"Unable to apply SPX date filter. "
+                    f"Checked start selectors={start_date_selectors}, end selectors={end_date_selectors}, "
+                    f"apply selectors={apply_selectors}. "
+                    f"Debug files saved under {download_dir}."
+                ) from exc
 
         if _is_login_url(page.url):
             _perform_login_flow()
