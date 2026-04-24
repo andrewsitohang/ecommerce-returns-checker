@@ -28,6 +28,23 @@ RETURNS_WEEKLY_TABLE = "fact_returns_weekly"
 RETURNS_REASON_TABLE = "fact_return_reason_weekly"
 RETURNS_DRIVER_TABLE = "fact_return_driver_weekly"
 
+NORMALIZED_ORDER_COLUMNS = [
+    "source_system",
+    "order_id",
+    "event_date",
+    "province",
+    "city",
+    "expedition",
+    "service_type",
+    "payment_method",
+    "cod_type",
+    "order_value",
+    "cod_value",
+    "shipping_fee",
+    "return_flag",
+    "return_reason",
+]
+
 
 def _env(name: str, default: Optional[str] = None) -> str:
     value = os.getenv(name, default)
@@ -259,17 +276,19 @@ def _fetch_api2_source_data(start_date: str, end_date: str) -> Dict[str, Any]:
         )
         return {"source_mode": source_mode, "data": records}
 
-    api2_url = _env("API2_URL")
-    api2_token = os.getenv("API2_TOKEN", "")
-    api2_params = {
-        "page": int(os.getenv("API2_PAGE", "1")),
-        "limit": int(os.getenv("API2_LIMIT", "100")),
-        "start_date": os.getenv("API2_START_DATE", start_date),
-        "end_date": os.getenv("API2_END_DATE", end_date),
-    }
-    api2_headers = {"Authorization": api2_token} if api2_token else {}
-    api2_payloads = _fetch_paged(api2_url, api2_params, api2_headers)
-    return {"source_mode": source_mode, "data": api2_payloads}
+    # Legacy API2 path intentionally disabled.
+    # api2_url = _env("API2_URL")
+    # api2_token = os.getenv("API2_TOKEN", "")
+    # api2_params = {
+    #     "page": int(os.getenv("API2_PAGE", "1")),
+    #     "limit": int(os.getenv("API2_LIMIT", "100")),
+    #     "start_date": os.getenv("API2_START_DATE", start_date),
+    #     "end_date": os.getenv("API2_END_DATE", end_date),
+    # }
+    # api2_headers = {"Authorization": api2_token} if api2_token else {}
+    # api2_payloads = _fetch_paged(api2_url, api2_params, api2_headers)
+    # return {"source_mode": source_mode, "data": api2_payloads}
+    raise ValueError("API2_SOURCE_MODE must be 'spx_web'; legacy API2 mode is disabled.")
 
 
 def _decode_api2_payload_blob(payload_text: str) -> tuple[str, List[Dict[str, Any]]]:
@@ -280,23 +299,23 @@ def _decode_api2_payload_blob(payload_text: str) -> tuple[str, List[Dict[str, An
 
 
 def fetch_api_raw() -> None:
-    api1_url = _env("API1_URL")
-    api1_token = os.getenv("API1_TOKEN", "")
-
     q_start, q_end = _current_quarter_range()
 
-    api1_params = {
-        "page": int(os.getenv("API1_PAGE", "1")),
-        "limit": int(os.getenv("API1_LIMIT", "100")),
-        "order_status": os.getenv("API1_ORDER_STATUS", "all"),
-        "filter_order": os.getenv("API1_FILTER_ORDER", ""),
-        "courier": os.getenv("API1_COURIER", ""),
-        "start_date": os.getenv("API1_START_DATE", q_start),
-        "end_date": os.getenv("API1_END_DATE", q_end),
-    }
-    api1_headers = {"Authorization": api1_token} if api1_token else {}
-
-    api1_payloads = _fetch_paged(api1_url, api1_params, api1_headers)
+    # Legacy API1 path intentionally disabled.
+    # api1_url = _env("API1_URL")
+    # api1_token = os.getenv("API1_TOKEN", "")
+    # api1_params = {
+    #     "page": int(os.getenv("API1_PAGE", "1")),
+    #     "limit": int(os.getenv("API1_LIMIT", "100")),
+    #     "order_status": os.getenv("API1_ORDER_STATUS", "all"),
+    #     "filter_order": os.getenv("API1_FILTER_ORDER", ""),
+    #     "courier": os.getenv("API1_COURIER", ""),
+    #     "start_date": os.getenv("API1_START_DATE", q_start),
+    #     "end_date": os.getenv("API1_END_DATE", q_end),
+    # }
+    # api1_headers = {"Authorization": api1_token} if api1_token else {}
+    # api1_payloads = _fetch_paged(api1_url, api1_params, api1_headers)
+    api1_payloads: List[Dict[str, Any]] = []
     api2_payloads = _fetch_api2_source_data(q_start, q_end)
 
     # persist raw payloads to DB (raw schema)
@@ -482,12 +501,14 @@ def build_returns_mart() -> None:
     api2_source_mode, api2_payloads = _decode_api2_payload_blob(cur.fetchone()[0])
     cur.close()
 
-    api1_orders = _normalize_api1_orders(api1_payloads)
+    # Legacy API1 normalization intentionally disabled.
+    # api1_orders = _normalize_api1_orders(api1_payloads)
+    api1_orders: List[Dict[str, Any]] = []
     api2_orders = _normalize_api2_source_data(api2_source_mode, api2_payloads)
-    returns_raw = pd.DataFrame(api1_orders + api2_orders)
+    returns_raw = pd.DataFrame(api2_orders)
 
     # staging tables
-    _df_to_postgres(pd.DataFrame(api1_orders), STG_API1_ORDERS, conn, STAGING_SCHEMA, replace=True)
+    _df_to_postgres(pd.DataFrame(api1_orders, columns=NORMALIZED_ORDER_COLUMNS), STG_API1_ORDERS, conn, STAGING_SCHEMA, replace=True)
     _df_to_postgres(pd.DataFrame(api2_orders), STG_API2_ORDERS, conn, STAGING_SCHEMA, replace=True)
 
     returns_raw["event_date"] = pd.to_datetime(returns_raw["event_date"], errors="coerce")
