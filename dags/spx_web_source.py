@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
@@ -379,6 +380,12 @@ def _save_response_export(response: Any, download_dir: Path) -> Optional[Path]:
         return None
     if not payload:
         return None
+    try:
+        decoded = json.loads(payload.decode("utf-8"))
+        if isinstance(decoded, dict) and "task_id" in decoded and "task_status" in decoded:
+            return None
+    except Exception:
+        pass
     try:
         headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
     except Exception:
