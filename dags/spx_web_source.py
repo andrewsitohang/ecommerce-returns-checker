@@ -362,6 +362,10 @@ def _looks_like_export_response(response: Any) -> bool:
     content_type = headers.get("content-type", "").lower()
     content_disposition = headers.get("content-disposition", "").lower()
     url = str(getattr(response, "url", "")).lower()
+    if "json" in content_type:
+        return False
+    if any(token in url for token in ["/task", "task_status", "task-id", "task_id"]):
+        return False
     if "attachment" in content_disposition:
         return True
     if any(token in content_type for token in ["spreadsheet", "excel", "csv"]):
