@@ -681,9 +681,24 @@ def fetch_spx_export_records(
         page.set_default_timeout(timeout_ms)
         captured_export_path: Optional[Path] = None
         capture_enabled = False
+        network_debug_events: List[str] = []
+
+        def _flush_network_debug() -> None:
+            if not network_debug_events:
+                return
+            debug_path = download_dir / "spx_network_debug.log"
+            debug_path.write_text("\n".join(network_debug_events), encoding="utf-8")
 
         def _handle_response(response: Any) -> None:
             nonlocal captured_export_path
+            url = response.url
+            content_type = response.headers.get("content-type", "")
+            lowered_url = url.lower()
+            lowered_content_type = content_type.lower()
+            if any(token in lowered_url for token in ["task", "export", "download", ".xlsx", ".csv"]):
+                network_debug_events.append(
+                    f"response\t{response.status}\t{content_type}\t{url}"
+                )
             if not capture_enabled or captured_export_path is not None:
                 return
             export_path = _save_response_export(response, download_dir)
@@ -844,6 +859,7 @@ def fetch_spx_export_records(
                 capture_enabled = False
         except PlaywrightTimeoutError as exc:
             _write_debug_artifacts(page, download_dir, "spx_download_debug")
+            _flush_network_debug()
             raise TimeoutError(
                 f"Timed out waiting for SPX export download. Checked download selectors={download_selectors}, "
                 f"dialog selectors={download_dialog_selectors}, result selectors={download_result_selectors}. "
@@ -851,6 +867,7 @@ def fetch_spx_export_records(
             ) from exc
         except Exception as exc:
             _write_debug_artifacts(page, download_dir, "spx_download_debug")
+            _flush_network_debug()
             raise TimeoutError(
                 f"Unable to navigate SPX export dialog. Checked download selectors={download_selectors}, "
                 f"dialog selectors={download_dialog_selectors}, result selectors={download_result_selectors}. "
@@ -858,6 +875,7 @@ def fetch_spx_export_records(
             ) from exc
         if export_path is None:
             _write_debug_artifacts(page, download_dir, "spx_download_debug")
+            _flush_network_debug()
             raise TimeoutError(f"SPX export completed without a detectable file. Debug files saved under {download_dir}.")
 
         context.close()
