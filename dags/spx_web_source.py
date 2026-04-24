@@ -817,7 +817,7 @@ def fetch_spx_export_records(
             try:
                 captured_export_path = None
                 capture_enabled = True
-                with page.expect_download(timeout=min(timeout_ms, 20000)) as download_info:
+                with page.expect_download(timeout=min(timeout_ms, 60000)) as download_info:
                     _click_result_download()
                 download = download_info.value
                 export_path = download_dir / download.suggested_filename
@@ -825,13 +825,18 @@ def fetch_spx_export_records(
             except PlaywrightTimeoutError:
                 captured_export_path = None
                 capture_enabled = True
-                _click_result_download()
-
-                deadline = time.time() + min(timeout_ms, 30000) / 1000.0
+                deadline = time.time() + min(timeout_ms, 90000) / 1000.0
+                next_retry_at = 0.0
                 while time.time() < deadline and export_path is None:
                     if captured_export_path is not None and captured_export_path.exists():
                         export_path = captured_export_path
                         break
+                    if time.time() >= next_retry_at:
+                        try:
+                            _click_result_download()
+                        except Exception:
+                            pass
+                        next_retry_at = time.time() + 5
                     time.sleep(1)
                 if export_path is None:
                     raise
