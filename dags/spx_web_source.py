@@ -25,7 +25,13 @@ EXPORT_COLUMNS = {
     "actual_pickup_at": "Waktu Penjemputan/Drop Off Aktual",
     "delivered_at": "Waktu Terkirim",
     "payment_role": "Payment Role",
+    "original_pickup_option": "Opsi Penjemputan Awal",
     "actual_pickup_option": "Opsi Penjemputan Aktual",
+    "cod_collection_flag": "Koleksi COD",
+    "cod_amount": "Jumlah COD",
+    "parcel_value": "Nilai Parcel",
+    "estimated_shipping_fee": "Estimasi Ongkir",
+    "actual_shipping_fee": "Ongkir Aktual",
     "delayed_at": "Waktu Penundaan Pengiriman",
     "delay_reason": "Alasan Pengiriman Tertunda",
     "returned_to_sender_at": "Waktu pengembalian ke pengirim",
@@ -49,7 +55,13 @@ EXPORT_COLUMN_ALIASES = {
     "actual_pickup_at": ["Waktu Penjemputan/Drop Off Aktual", "Actual Pickup/Drop Off Time"],
     "delivered_at": ["Waktu Terkirim", "Delivered Time"],
     "payment_role": ["Payment Role"],
+    "original_pickup_option": ["Opsi Penjemputan Awal", "Original pickup option", "Original Pickup Option"],
     "actual_pickup_option": ["Opsi Penjemputan Aktual", "Actual pickup option"],
+    "cod_collection_flag": ["Koleksi COD", "COD Collection(Y/N)"],
+    "cod_amount": ["Jumlah COD", "COD Amount"],
+    "parcel_value": ["Nilai Parcel", "Parcel Value"],
+    "estimated_shipping_fee": ["Estimasi Ongkir", "Estimated Shipping Fee"],
+    "actual_shipping_fee": ["Ongkir Aktual", "Actual Shipping Fee"],
     "delayed_at": ["Waktu Penundaan Pengiriman", "Delivery OnHold Times"],
     "delay_reason": ["Alasan Pengiriman Tertunda", "Delivery OnHold Reason"],
     "returned_to_sender_at": ["Waktu pengembalian ke pengirim", "Returning Start Time"],
@@ -399,6 +411,26 @@ def _infer_cod_type(payment_role: Any) -> tuple[str, str]:
     return payment_text, "NON-COD"
 
 
+def _to_number(value: Any) -> float:
+    if value is None:
+        return 0.0
+    text = str(value).strip()
+    if text in ("", "-", "No Value", "nan", "NaN"):
+        return 0.0
+    text = text.replace(",", "")
+    try:
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def _infer_cod_fields(row: pd.Series) -> tuple[str, float]:
+    cod_amount = _to_number(row.get(EXPORT_COLUMNS["cod_amount"]))
+    cod_flag = _text(row.get(EXPORT_COLUMNS["cod_collection_flag"]), fallback="").lower()
+    is_cod = cod_amount > 0 or cod_flag in ("y", "yes", "cod", "true")
+    return ("COD" if is_cod else "NON-COD"), cod_amount
+
+
 def _infer_return_flag_and_reason(row: pd.Series) -> tuple[int, str]:
     returned_at = _text(row.get(EXPORT_COLUMNS["returned_to_sender_at"]), fallback="")
     failed_reason = _text(row.get(EXPORT_COLUMNS["failed_reason"]), fallback="")
@@ -463,8 +495,16 @@ def load_spx_export_records(path: str | Path) -> List[Dict[str, Any]]:
         province, city = _split_region(row.get(EXPORT_COLUMNS["recipient_region"]))
         created_at = _to_datetime(row.get(EXPORT_COLUMNS["created_at"]))
         returned_at = _to_datetime(row.get(EXPORT_COLUMNS["returned_to_sender_at"]))
-        payment_method, cod_type = _infer_cod_type(row.get(EXPORT_COLUMNS["payment_role"]))
+        payment_method, _ = _infer_cod_type(row.get(EXPORT_COLUMNS["payment_role"]))
+        cod_type, cod_amount = _infer_cod_fields(row)
         return_flag, return_reason = _infer_return_flag_and_reason(row)
+        estimated_shipping_fee = _to_number(row.get(EXPORT_COLUMNS["estimated_shipping_fee"]))
+        actual_shipping_fee = _to_number(row.get(EXPORT_COLUMNS["actual_shipping_fee"]))
+        parcel_value = _to_number(row.get(EXPORT_COLUMNS["parcel_value"]))
+        shipping_fee = actual_shipping_fee if actual_shipping_fee > 0 else estimated_shipping_fee
+        service_type = _text(row.get(EXPORT_COLUMNS["original_pickup_option"]), fallback="")
+        if service_type in ("", "No Value"):
+            service_type = _text(row.get(EXPORT_COLUMNS["actual_pickup_option"]))
 
         records.append(
             {
@@ -474,12 +514,12 @@ def load_spx_export_records(path: str | Path) -> List[Dict[str, Any]]:
                 "province": province,
                 "city": city,
                 "expedition": "SPX",
-                "service_type": _text(row.get(EXPORT_COLUMNS["actual_pickup_option"])),
+                "service_type": service_type,
                 "payment_method": payment_method,
                 "cod_type": cod_type,
-                "order_value": 0.0,
-                "cod_value": 0.0,
-                "shipping_fee": 0.0,
+                "order_value": parcel_value,
+                "cod_value": cod_amount,
+                "shipping_fee": shipping_fee,
                 "return_flag": return_flag,
                 "return_reason": return_reason,
                 "customer_reference_no": _text(row.get(EXPORT_COLUMNS["customer_reference_no"])),
