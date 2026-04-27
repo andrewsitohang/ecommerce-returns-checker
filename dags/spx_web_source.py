@@ -360,6 +360,77 @@ def _click_successful_export_download(page: Any, timeout_ms: int) -> bool:
     return False
 
 
+def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Optional[int] = None) -> bool:
+    task_button_selectors = [
+        "[data-chain='navTaskBtn']",
+        ".task-icon-container-unread",
+        ".task-icon-container",
+        "section[data-chain='navTaskBtn']",
+    ]
+    task_panel_selectors = [
+        ".ssc-popover",
+        "div[class*='popover']",
+        "div[class*='dropdown']",
+        "div[class*='drawer']",
+        "[role='dialog']",
+    ]
+    download_button_selectors = [
+        ".ssc-popover button:has-text('Unduh')",
+        ".ssc-popover a:has-text('Unduh')",
+        "div[class*='popover'] button:has-text('Unduh')",
+        "div[class*='popover'] a:has-text('Unduh')",
+        "div[class*='dropdown'] button:has-text('Unduh')",
+        "div[class*='dropdown'] a:has-text('Unduh')",
+        "div[class*='drawer'] button:has-text('Unduh')",
+        "div[class*='drawer'] a:has-text('Unduh')",
+    ]
+    try:
+        task_button = _wait_for_first_visible(page, task_button_selectors, min(timeout_ms, 10000))
+        task_button.click(force=True)
+    except Exception:
+        return False
+
+    try:
+        _wait_for_first_visible(page, task_panel_selectors, min(timeout_ms, 10000))
+    except Exception:
+        return False
+
+    if latest_task_id is not None:
+        try:
+            _wait_for_any_visible_text(page, [str(latest_task_id)], 3000)
+        except Exception:
+            pass
+    try:
+        _wait_for_any_visible_text(
+            page,
+            ["Unduh", "Ekspor Pelacakan Paket Berhasil", "Mengekspor Paket", "export", "Export"],
+            5000,
+        )
+    except Exception:
+        pass
+
+    for selector in download_button_selectors:
+        locator = page.locator(selector)
+        try:
+            count = min(locator.count(), 20)
+        except Exception:
+            count = 0
+        for idx in range(count):
+            button = locator.nth(idx)
+            try:
+                if not button.is_visible():
+                    continue
+                button.scroll_into_view_if_needed()
+                try:
+                    button.click(force=True)
+                except Exception:
+                    button.evaluate("(el) => el.click()")
+                return True
+            except Exception:
+                continue
+    return False
+
+
 def _guess_export_extension(content_type: str, url: str) -> str:
     lowered_type = (content_type or "").lower()
     lowered_url = (url or "").lower()
@@ -957,6 +1028,8 @@ def fetch_spx_export_records(
             def _click_result_download() -> None:
                 if _click_successful_export_download(page, timeout_ms):
                     return
+                if _open_task_panel_download(page, timeout_ms, latest_export_task_id):
+                    return
                 try:
                     _wait_for_first_visible(page, download_result_selectors, timeout_ms).click()
                 except Exception:
@@ -987,6 +1060,9 @@ def fetch_spx_export_records(
                                 )
                                 _wait_for_first_visible(page, download_selectors, min(timeout_ms, 5000)).click()
                                 time.sleep(1)
+                                if _open_task_panel_download(page, min(timeout_ms, 10000), latest_export_task_id):
+                                    next_retry_at = time.time() + 5
+                                    continue
                             _click_result_download()
                         except Exception:
                             pass
