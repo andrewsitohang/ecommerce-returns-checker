@@ -744,6 +744,9 @@ def fetch_spx_export_records(
                 try:
                     payload = json.loads(response.body().decode("utf-8"))
                     download_urls = _extract_export_download_urls(payload)
+                    network_debug_events.append(
+                        f"task_payload\t{json.dumps(payload, ensure_ascii=True)[:4000]}"
+                    )
                     if download_urls:
                         network_debug_events.append(
                             f"task_urls\t{json.dumps(download_urls, ensure_ascii=True)}"
