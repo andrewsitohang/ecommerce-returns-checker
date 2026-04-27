@@ -753,6 +753,8 @@ def fetch_spx_export_records(
         captured_export_path: Optional[Path] = None
         capture_enabled = False
         network_debug_events: List[str] = []
+        export_task_ready = False
+        latest_export_task_id: Optional[int] = None
 
         def _flush_network_debug() -> None:
             if not network_debug_events:
@@ -761,7 +763,7 @@ def fetch_spx_export_records(
             debug_path.write_text("\n".join(network_debug_events), encoding="utf-8")
 
         def _handle_response(response: Any) -> None:
-            nonlocal captured_export_path
+            nonlocal captured_export_path, export_task_ready, latest_export_task_id
             url = response.url
             content_type = response.headers.get("content-type", "")
             lowered_url = url.lower()
@@ -772,6 +774,15 @@ def fetch_spx_export_records(
             if capture_enabled and "export_task_list" in lowered_url:
                 try:
                     payload = json.loads(response.body().decode("utf-8"))
+                    task_list = payload.get("data", {}).get("list", [])
+                    if task_list:
+                        current_task = task_list[0]
+                        latest_export_task_id = current_task.get("task_id")
+                        if current_task.get("task_status") == 4:
+                            export_task_ready = True
+                            network_debug_events.append(
+                                f"task_ready\t{latest_export_task_id}\t{current_task.get('file_id')}\t{current_task.get('success_count')}"
+                            )
                     download_urls = _extract_export_download_urls(payload)
                     network_debug_events.append(
                         f"task_payload\t{json.dumps(payload, ensure_ascii=True)[:4000]}"
@@ -953,6 +964,12 @@ def fetch_spx_export_records(
                         break
                     if time.time() >= next_retry_at:
                         try:
+                            if export_task_ready:
+                                network_debug_events.append(
+                                    f"reopen_export_panel\t{latest_export_task_id or 'unknown'}"
+                                )
+                                _wait_for_first_visible(page, download_selectors, min(timeout_ms, 5000)).click()
+                                time.sleep(1)
                             _click_result_download()
                         except Exception:
                             pass
