@@ -400,6 +400,48 @@ def _save_response_export(response: Any, download_dir: Path) -> Optional[Path]:
     return export_path
 
 
+def _walk_json_strings(value: Any) -> List[str]:
+    values: List[str] = []
+    if isinstance(value, dict):
+        for nested in value.values():
+            values.extend(_walk_json_strings(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            values.extend(_walk_json_strings(nested))
+    elif isinstance(value, str):
+        values.append(value.strip())
+    return values
+
+
+def _normalize_candidate_url(value: str) -> Optional[str]:
+    text = str(value).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        return text
+    if text.startswith("/"):
+        return f"https://spx.co.id{text}"
+    return None
+
+
+def _extract_export_download_urls(payload: Any) -> List[str]:
+    candidates: List[str] = []
+    seen: set[str] = set()
+    for value in _walk_json_strings(payload):
+        normalized = _normalize_candidate_url(value)
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if not any(token in lowered for token in ["download", "export", ".xlsx", ".xls", ".csv"]):
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        candidates.append(normalized)
+    return candidates
+
+
 def _split_region(value: Any) -> tuple[str, str]:
     text = _text(value)
     if text == "No Value":
@@ -694,11 +736,42 @@ def fetch_spx_export_records(
             url = response.url
             content_type = response.headers.get("content-type", "")
             lowered_url = url.lower()
-            lowered_content_type = content_type.lower()
             if any(token in lowered_url for token in ["task", "export", "download", ".xlsx", ".csv"]):
                 network_debug_events.append(
                     f"response\t{response.status}\t{content_type}\t{url}"
                 )
+            if capture_enabled and "export_task_list" in lowered_url:
+                try:
+                    payload = json.loads(response.body().decode("utf-8"))
+                    download_urls = _extract_export_download_urls(payload)
+                    if download_urls:
+                        network_debug_events.append(
+                            f"task_urls\t{json.dumps(download_urls, ensure_ascii=True)}"
+                        )
+                    for download_url in download_urls:
+                        download_response = context.request.get(download_url, timeout=min(timeout_ms, 30000))
+                        if not download_response.ok:
+                            network_debug_events.append(
+                                f"task_download_failed\t{download_response.status}\t{download_url}"
+                            )
+                            continue
+                        payload_bytes = download_response.body()
+                        if not payload_bytes:
+                            network_debug_events.append(f"task_download_empty\t{download_url}")
+                            continue
+                        extension = _guess_export_extension(
+                            download_response.headers.get("content-type", ""),
+                            download_url,
+                        )
+                        export_path = download_dir / f"spx_export_task{extension}"
+                        export_path.write_bytes(payload_bytes)
+                        captured_export_path = export_path
+                        network_debug_events.append(
+                            f"task_download_saved\t{download_response.status}\t{download_url}\t{export_path.name}"
+                        )
+                        return
+                except Exception as exc:
+                    network_debug_events.append(f"task_parse_error\t{url}\t{exc}")
             if not capture_enabled or captured_export_path is not None:
                 return
             export_path = _save_response_export(response, download_dir)
