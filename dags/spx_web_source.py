@@ -375,14 +375,16 @@ def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Option
         "[role='dialog']",
     ]
     download_button_selectors = [
-        ".ssc-popover button:has-text('Unduh')",
-        ".ssc-popover a:has-text('Unduh')",
-        "div[class*='popover'] button:has-text('Unduh')",
-        "div[class*='popover'] a:has-text('Unduh')",
-        "div[class*='dropdown'] button:has-text('Unduh')",
-        "div[class*='dropdown'] a:has-text('Unduh')",
-        "div[class*='drawer'] button:has-text('Unduh')",
-        "div[class*='drawer'] a:has-text('Unduh')",
+        ".ssc-popover button.ssc-button-small:has-text('Unduh')",
+        ".ssc-popover a.ssc-button-small:has-text('Unduh')",
+        "div[class*='popover'] button.ssc-button-small:has-text('Unduh')",
+        "div[class*='popover'] a.ssc-button-small:has-text('Unduh')",
+        "div[class*='dropdown'] button.ssc-button-small:has-text('Unduh')",
+        "div[class*='dropdown'] a.ssc-button-small:has-text('Unduh')",
+        "div[class*='drawer'] button.ssc-button-small:has-text('Unduh')",
+        "div[class*='drawer'] a.ssc-button-small:has-text('Unduh')",
+        "button.ssc-button-small:has-text('Unduh')",
+        "a.ssc-button-small:has-text('Unduh')",
     ]
     try:
         task_button = _wait_for_first_visible(page, task_button_selectors, min(timeout_ms, 10000))
@@ -408,6 +410,32 @@ def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Option
         )
     except Exception:
         pass
+
+    if latest_task_id is not None:
+        task_specific_buttons = page.locator(
+            "xpath=("
+            f"//*[contains(normalize-space(.), '{latest_task_id}')]"
+            "/ancestor::*[self::li or self::div or self::tr][1]"
+            "//*[contains(@class,'ssc-button-small') and contains(normalize-space(.), 'Unduh')]"
+            ")"
+        )
+        try:
+            count = min(task_specific_buttons.count(), 5)
+        except Exception:
+            count = 0
+        for idx in range(count):
+            button = task_specific_buttons.nth(idx)
+            try:
+                if not button.is_visible():
+                    continue
+                button.scroll_into_view_if_needed()
+                try:
+                    button.click(force=True)
+                except Exception:
+                    button.evaluate("(el) => el.click()")
+                return True
+            except Exception:
+                continue
 
     for selector in download_button_selectors:
         locator = page.locator(selector)
