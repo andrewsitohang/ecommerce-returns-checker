@@ -211,6 +211,35 @@ def _write_debug_artifacts(page: Any, output_dir: Path, prefix: str) -> None:
         pass
 
 
+def _write_control_debug(page: Any, output_dir: Path, prefix: str) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lines: List[str] = []
+    selectors = ["button", "a", "[role='button']"]
+    for selector in selectors:
+        locator = page.locator(selector)
+        try:
+            count = min(locator.count(), 200)
+        except Exception:
+            count = 0
+        for idx in range(count):
+            item = locator.nth(idx)
+            try:
+                if not item.is_visible():
+                    continue
+                text = item.inner_text().strip()
+                if not text:
+                    continue
+                lowered = text.lower()
+                if not any(token in lowered for token in ["unduh", "download", "ekspor", "export", "berhasil", "paket"]):
+                    continue
+                html = item.evaluate("(el) => el.outerHTML")
+                lines.append(f"{selector}\t{text}\t{html}")
+            except Exception:
+                continue
+    if lines:
+        (output_dir / f"{prefix}.txt").write_text("\n".join(lines), encoding="utf-8")
+
+
 def _wait_for_first_visible(page: Any, selectors: List[str], timeout_ms: int) -> Any:
     if not selectors:
         raise ValueError("selectors must not be empty")
@@ -935,6 +964,7 @@ def fetch_spx_export_records(
                 capture_enabled = False
         except PlaywrightTimeoutError as exc:
             _write_debug_artifacts(page, download_dir, "spx_download_debug")
+            _write_control_debug(page, download_dir, "spx_download_controls")
             _flush_network_debug()
             raise TimeoutError(
                 f"Timed out waiting for SPX export download. Checked download selectors={download_selectors}, "
@@ -943,6 +973,7 @@ def fetch_spx_export_records(
             ) from exc
         except Exception as exc:
             _write_debug_artifacts(page, download_dir, "spx_download_debug")
+            _write_control_debug(page, download_dir, "spx_download_controls")
             _flush_network_debug()
             raise TimeoutError(
                 f"Unable to navigate SPX export dialog. Checked download selectors={download_selectors}, "
@@ -951,6 +982,7 @@ def fetch_spx_export_records(
             ) from exc
         if export_path is None:
             _write_debug_artifacts(page, download_dir, "spx_download_debug")
+            _write_control_debug(page, download_dir, "spx_download_controls")
             _flush_network_debug()
             raise TimeoutError(f"SPX export completed without a detectable file. Debug files saved under {download_dir}.")
 
