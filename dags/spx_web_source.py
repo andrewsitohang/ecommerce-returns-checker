@@ -12,6 +12,9 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 
+SPX_DOWNLOAD_DEBUG_VERSION = "task-panel-v3"
+
+
 EXPORT_COLUMNS = {
     "tracking_no": "Nomer Resi",
     "customer_reference_no": "No Referensi Pelanggan",
@@ -213,7 +216,7 @@ def _write_debug_artifacts(page: Any, output_dir: Path, prefix: str) -> None:
 
 def _write_control_debug(page: Any, output_dir: Path, prefix: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    lines: List[str] = []
+    lines: List[str] = [f"debug_version\t{SPX_DOWNLOAD_DEBUG_VERSION}"]
     selectors = ["button", "a", "[role='button']"]
     for selector in selectors:
         locator = page.locator(selector)
@@ -244,8 +247,7 @@ def _write_control_debug(page: Any, output_dir: Path, prefix: str) -> None:
                 lines.append(f"{selector}\t{text}\tcontext={context}\t{html}")
             except Exception:
                 continue
-    if lines:
-        (output_dir / f"{prefix}.txt").write_text("\n".join(lines), encoding="utf-8")
+    (output_dir / f"{prefix}.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
 def _write_task_panel_debug(page: Any, output_dir: Path, prefix: str) -> None:
@@ -392,7 +394,17 @@ def _click_successful_export_download(page: Any, timeout_ms: int) -> bool:
     return False
 
 
-def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Optional[int] = None) -> bool:
+def _open_task_panel_download(
+    page: Any,
+    timeout_ms: int,
+    latest_task_id: Optional[int] = None,
+    debug_dir: Optional[Path] = None,
+    debug_events: Optional[List[str]] = None,
+) -> bool:
+    def _debug(message: str) -> None:
+        if debug_events is not None:
+            debug_events.append(message)
+
     task_button_selectors = [
         "[data-chain='navTaskBtn']",
         ".task-icon-container-unread",
@@ -419,14 +431,18 @@ def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Option
         "a.ssc-button-small:has-text('Unduh')",
     ]
     try:
+        _debug(f"task_panel_open_attempt\t{latest_task_id or 'unknown'}")
         task_button = _wait_for_first_visible(page, task_button_selectors, min(timeout_ms, 10000))
         task_button.click(force=True)
-    except Exception:
+    except Exception as exc:
+        _debug(f"task_panel_open_failed\t{type(exc).__name__}")
         return False
 
     try:
         _wait_for_first_visible(page, task_panel_selectors, min(timeout_ms, 10000))
-    except Exception:
+        _debug("task_panel_opened")
+    except Exception as exc:
+        _debug(f"task_panel_wait_failed\t{type(exc).__name__}")
         return False
 
     if latest_task_id is not None:
@@ -443,12 +459,11 @@ def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Option
     except Exception:
         pass
 
-    try:
-        download_dir_value = page.evaluate("() => window.__spxDownloadDebugDir || ''")
-        if download_dir_value:
-            _write_task_panel_debug(page, Path(download_dir_value), "spx_task_panel_debug")
-    except Exception:
-        pass
+    if debug_dir is not None:
+        try:
+            _write_task_panel_debug(page, debug_dir, "spx_task_panel_debug")
+        except Exception as exc:
+            _debug(f"task_panel_debug_failed\t{type(exc).__name__}")
 
     if latest_task_id is not None:
         task_specific_buttons = page.locator(
@@ -472,6 +487,7 @@ def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Option
                     button.click(force=True)
                 except Exception:
                     button.evaluate("(el) => el.click()")
+                _debug(f"task_panel_click_task_button\t{latest_task_id}\t{idx}")
                 return True
             except Exception:
                 continue
@@ -492,9 +508,11 @@ def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Option
                     button.click(force=True)
                 except Exception:
                     button.evaluate("(el) => el.click()")
+                _debug(f"task_panel_click_button\t{selector}\t{idx}")
                 return True
             except Exception:
                 continue
+    _debug("task_panel_download_button_not_found")
     return False
 
 
@@ -891,6 +909,7 @@ def fetch_spx_export_records(
         captured_export_path: Optional[Path] = None
         capture_enabled = False
         network_debug_events: List[str] = []
+        network_debug_events.append(f"debug_version\t{SPX_DOWNLOAD_DEBUG_VERSION}")
         export_task_ready = False
         latest_export_task_id: Optional[int] = None
 
@@ -1099,7 +1118,13 @@ def fetch_spx_export_records(
             def _click_result_download() -> None:
                 if _click_successful_export_download(page, timeout_ms):
                     return
-                if _open_task_panel_download(page, timeout_ms, latest_export_task_id):
+                if _open_task_panel_download(
+                    page,
+                    timeout_ms,
+                    latest_export_task_id,
+                    download_dir,
+                    network_debug_events,
+                ):
                     return
                 try:
                     _wait_for_first_visible(page, download_result_selectors, timeout_ms).click()
@@ -1129,9 +1154,15 @@ def fetch_spx_export_records(
                                 network_debug_events.append(
                                     f"retry_task_panel_download\t{latest_export_task_id or 'unknown'}"
                                 )
-                                if _open_task_panel_download(page, min(timeout_ms, 10000), latest_export_task_id):
-                                    next_retry_at = time.time() + 5
-                                    continue
+                                _open_task_panel_download(
+                                    page,
+                                    min(timeout_ms, 10000),
+                                    latest_export_task_id,
+                                    download_dir,
+                                    network_debug_events,
+                                )
+                                next_retry_at = time.time() + 5
+                                continue
                             _click_result_download()
                         except Exception:
                             pass
