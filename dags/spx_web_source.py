@@ -233,11 +233,43 @@ def _write_control_debug(page: Any, output_dir: Path, prefix: str) -> None:
                 if not any(token in lowered for token in ["unduh", "download", "ekspor", "export", "berhasil", "paket"]):
                     continue
                 html = item.evaluate("(el) => el.outerHTML")
-                lines.append(f"{selector}\t{text}\t{html}")
+                context = item.evaluate(
+                    """(el) => {
+                        const container = el.closest('li, tr, [role="dialog"], [class*="popover"], [class*="dropdown"], [class*="drawer"], div');
+                        if (!container) return '';
+                        const text = (container.innerText || '').replace(/\\s+/g, ' ').trim();
+                        return text.slice(0, 500);
+                    }"""
+                )
+                lines.append(f"{selector}\t{text}\tcontext={context}\t{html}")
             except Exception:
                 continue
     if lines:
         (output_dir / f"{prefix}.txt").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_task_panel_debug(page: Any, output_dir: Path, prefix: str) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    selectors = [
+        ".ssc-popover",
+        "div[class*='popover']",
+        "div[class*='dropdown']",
+        "div[class*='drawer']",
+        "[role='dialog']",
+    ]
+    for selector in selectors:
+        locator = page.locator(selector).first
+        try:
+            if not locator.is_visible():
+                continue
+            text = locator.evaluate(
+                "(el) => (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 4000)"
+            )
+            html = locator.evaluate("(el) => el.outerHTML")
+            (output_dir / f"{prefix}.txt").write_text(f"selector={selector}\ntext={text}\n\n{html}", encoding="utf-8")
+            return
+        except Exception:
+            continue
 
 
 def _wait_for_first_visible(page: Any, selectors: List[str], timeout_ms: int) -> Any:
@@ -408,6 +440,13 @@ def _open_task_panel_download(page: Any, timeout_ms: int, latest_task_id: Option
             ["Unduh", "Ekspor Pelacakan Paket Berhasil", "Mengekspor Paket", "export", "Export"],
             5000,
         )
+    except Exception:
+        pass
+
+    try:
+        download_dir_value = page.evaluate("() => window.__spxDownloadDebugDir || ''")
+        if download_dir_value:
+            _write_task_panel_debug(page, Path(download_dir_value), "spx_task_panel_debug")
     except Exception:
         pass
 
@@ -991,6 +1030,10 @@ def fetch_spx_export_records(
 
         page.goto(tracking_url, wait_until="domcontentloaded")
         _wait_for_page_ready(page, timeout_ms)
+        try:
+            page.evaluate("(dir) => { window.__spxDownloadDebugDir = dir; }", str(download_dir))
+        except Exception:
+            pass
 
         for _ in range(2):
             if not _is_login_url(page.url):
@@ -1084,10 +1127,8 @@ def fetch_spx_export_records(
                         try:
                             if export_task_ready:
                                 network_debug_events.append(
-                                    f"reopen_export_panel\t{latest_export_task_id or 'unknown'}"
+                                    f"retry_task_panel_download\t{latest_export_task_id or 'unknown'}"
                                 )
-                                _wait_for_first_visible(page, download_selectors, min(timeout_ms, 5000)).click()
-                                time.sleep(1)
                                 if _open_task_panel_download(page, min(timeout_ms, 10000), latest_export_task_id):
                                     next_retry_at = time.time() + 5
                                     continue
