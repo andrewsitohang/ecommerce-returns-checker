@@ -1065,23 +1065,38 @@ def fetch_spx_export_records(
                 f"SPX login did not complete after retries. Still on URL: {page.url}. Debug files saved under {download_dir}."
             )
 
-        if start_date_selectors and end_date_selectors:
+        def _apply_date_filter() -> None:
+            _fill_first_matching(page, start_date_selectors, _to_date_text(start_date), timeout_ms)
+            _fill_first_matching(page, end_date_selectors, _to_date_text(end_date), timeout_ms)
             try:
-                used_start = _fill_first_matching(page, start_date_selectors, _to_date_text(start_date), timeout_ms)
-                used_end = _fill_first_matching(page, end_date_selectors, _to_date_text(end_date), timeout_ms)
+                _wait_for_first_visible(page, apply_selectors, timeout_ms).click()
+                _wait_for_page_ready(page, timeout_ms)
+            except Exception:
+                pass
+
+        if start_date_selectors and end_date_selectors:
+            last_date_filter_error: Optional[Exception] = None
+            for attempt in range(2):
                 try:
-                    _wait_for_first_visible(page, apply_selectors, timeout_ms).click()
-                    _wait_for_page_ready(page, timeout_ms)
-                except Exception:
-                    pass
-            except Exception as exc:
+                    _apply_date_filter()
+                    last_date_filter_error = None
+                    break
+                except Exception as exc:
+                    last_date_filter_error = exc
+                    if _is_login_url(page.url) and attempt == 0:
+                        network_debug_events.append("date_filter_login_redirect")
+                        _perform_login_flow()
+                        continue
+                    break
+            if last_date_filter_error is not None:
                 _write_debug_artifacts(page, download_dir, "spx_date_filter_debug")
+                _flush_network_debug()
                 raise RuntimeError(
-                    f"Unable to apply SPX date filter. "
+                    f"Unable to apply SPX date filter. Current URL: {page.url}. "
                     f"Checked start selectors={start_date_selectors}, end selectors={end_date_selectors}, "
                     f"apply selectors={apply_selectors}. "
                     f"Debug files saved under {download_dir}."
-                ) from exc
+                ) from last_date_filter_error
 
         if _is_login_url(page.url):
             _perform_login_flow()
