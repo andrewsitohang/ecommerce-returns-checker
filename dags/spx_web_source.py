@@ -762,6 +762,22 @@ def fetch_spx_export_records(
             debug_path = download_dir / "spx_network_debug.log"
             debug_path.write_text("\n".join(network_debug_events), encoding="utf-8")
 
+        def _handle_request(request: Any) -> None:
+            try:
+                url = request.url
+                lowered_url = url.lower()
+                if not any(token in lowered_url for token in ["task", "export", "download", "file_id", "task_id", ".xlsx", ".csv"]):
+                    return
+                method = request.method
+                post_data = request.post_data or ""
+                if post_data:
+                    post_data = post_data[:1000]
+                network_debug_events.append(
+                    f"request\t{method}\t{url}\t{post_data}"
+                )
+            except Exception:
+                return
+
         def _handle_response(response: Any) -> None:
             nonlocal captured_export_path, export_task_ready, latest_export_task_id
             url = response.url
@@ -821,6 +837,7 @@ def fetch_spx_export_records(
             if export_path is not None:
                 captured_export_path = export_path
 
+        page.on("request", _handle_request)
         page.on("response", _handle_response)
 
         def _perform_login_flow() -> None:
