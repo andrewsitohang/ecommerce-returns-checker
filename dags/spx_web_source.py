@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 
-SPX_DOWNLOAD_DEBUG_VERSION = "task-panel-v3"
+SPX_DOWNLOAD_DEBUG_VERSION = "task-panel-v4"
 
 
 EXPORT_COLUMNS = {
@@ -1185,6 +1185,12 @@ def fetch_spx_export_records(
                                     latest_export_task_id,
                                     download_dir,
                                     network_debug_events,
+                                )
+                                next_retry_at = time.time() + 5
+                                continue
+                            if latest_export_task_id:
+                                network_debug_events.append(
+                                    f"retry_wait_task_pending\t{latest_export_task_id}"
                                 )
                                 next_retry_at = time.time() + 5
                                 continue
