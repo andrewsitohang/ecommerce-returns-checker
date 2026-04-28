@@ -1141,6 +1141,11 @@ def fetch_spx_export_records(
                     network_debug_events,
                 ):
                     return
+                if export_task_ready:
+                    network_debug_events.append(
+                        f"initial_task_ready_skip_main_download\t{latest_export_task_id or 'unknown'}"
+                    )
+                    return
                 try:
                     _wait_for_first_visible(page, download_result_selectors, timeout_ms).click()
                 except Exception:
