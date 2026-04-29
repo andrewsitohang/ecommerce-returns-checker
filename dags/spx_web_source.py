@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 
-SPX_DOWNLOAD_DEBUG_VERSION = "task-panel-v4"
+SPX_DOWNLOAD_DEBUG_VERSION = "task-panel-v6"
 
 
 EXPORT_COLUMNS = {
@@ -157,7 +157,11 @@ def _selector_candidates(env_name: str, defaults: List[str]) -> List[str]:
     configured = os.getenv(env_name, "").strip()
     if not configured:
         return defaults
-    return [item.strip() for item in configured.split(",") if item.strip()]
+    candidates = [item.strip() for item in configured.split(",") if item.strip()]
+    for selector in defaults:
+        if selector not in candidates:
+            candidates.append(selector)
+    return candidates
 
 
 def _set_input_value(locator: Any, value: str) -> None:
@@ -253,8 +257,12 @@ def _write_control_debug(page: Any, output_dir: Path, prefix: str) -> None:
 def _write_task_panel_debug(page: Any, output_dir: Path, prefix: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     selectors = [
-        ".ssc-popover",
+        ".ssc-popover-popper",
+        ".ssc-popover-content",
+        "[class*='popover-popper']",
+        "[class*='popover-content']",
         "div[class*='popover']",
+        ".ssc-popover",
         "div[class*='dropdown']",
         "div[class*='drawer']",
         "[role='dialog']",
@@ -407,18 +415,32 @@ def _open_task_panel_download(
 
     task_button_selectors = [
         "[data-chain='navTaskBtn']",
+        ".ssc-popover-reference:has(.task-icon-container)",
         ".task-icon-container-unread",
         ".task-icon-container",
         "section[data-chain='navTaskBtn']",
     ]
     task_panel_selectors = [
-        ".ssc-popover",
-        "div[class*='popover']",
+        ".ssc-popover-popper",
+        ".ssc-popover-content",
+        "[class*='popover-popper']",
+        "[class*='popover-content']",
+        "div[class*='popover']:has-text('Unduh')",
+        "div[class*='popover']:has-text('Ekspor')",
+        "div[class*='popover']:has-text('Mengekspor')",
         "div[class*='dropdown']",
         "div[class*='drawer']",
         "[role='dialog']",
     ]
     download_button_selectors = [
+        ".ssc-popover-popper button:has-text('Unduh')",
+        ".ssc-popover-popper a:has-text('Unduh')",
+        ".ssc-popover-content button:has-text('Unduh')",
+        ".ssc-popover-content a:has-text('Unduh')",
+        "[class*='popover-popper'] button:has-text('Unduh')",
+        "[class*='popover-popper'] a:has-text('Unduh')",
+        "[class*='popover-content'] button:has-text('Unduh')",
+        "[class*='popover-content'] a:has-text('Unduh')",
         ".ssc-popover button.ssc-button-small:has-text('Unduh')",
         ".ssc-popover a.ssc-button-small:has-text('Unduh')",
         "div[class*='popover'] button.ssc-button-small:has-text('Unduh')",
@@ -433,13 +455,24 @@ def _open_task_panel_download(
     try:
         _debug(f"task_panel_open_attempt\t{latest_task_id or 'unknown'}")
         task_button = _wait_for_first_visible(page, task_button_selectors, min(timeout_ms, 10000))
+        try:
+            task_button.hover()
+            page.wait_for_timeout(500)
+        except Exception:
+            pass
         task_button.click(force=True)
+        page.wait_for_timeout(1000)
     except Exception as exc:
         _debug(f"task_panel_open_failed\t{type(exc).__name__}")
         return False
 
     try:
-        _wait_for_first_visible(page, task_panel_selectors, min(timeout_ms, 10000))
+        try:
+            _wait_for_first_visible(page, task_panel_selectors, min(timeout_ms, 10000))
+        except Exception:
+            task_button.click(force=True)
+            page.wait_for_timeout(1000)
+            _wait_for_first_visible(page, task_panel_selectors, min(timeout_ms, 10000))
         _debug("task_panel_opened")
     except Exception as exc:
         _debug(f"task_panel_wait_failed\t{type(exc).__name__}")
@@ -675,8 +708,12 @@ def _infer_return_flag_and_reason(row: pd.Series) -> tuple[int, str]:
     delay_reason = _text(row.get(EXPORT_COLUMNS["delay_reason"]), fallback="")
     status_text = _text(row.get(EXPORT_COLUMNS["delivery_status"]), fallback="")
 
+    cancel_keywords = ("cancel", "canceled", "cancelled", "batal", "dibatalkan")
     return_keywords = ("return", "retur", "gagal", "failed", "ditolak")
     status_lower = status_text.lower()
+    reason_text = f"{failed_reason} {delay_reason}".lower()
+    if any(key in f"{status_lower} {reason_text}" for key in cancel_keywords):
+        return 0, "Cancelled"
     is_return = bool(returned_at) or bool(failed_reason) or any(key in status_lower for key in return_keywords)
 
     if failed_reason:
@@ -762,6 +799,8 @@ def load_spx_export_records(path: str | Path) -> List[Dict[str, Any]]:
                 "return_reason": return_reason,
                 "customer_reference_no": _text(row.get(EXPORT_COLUMNS["customer_reference_no"])),
                 "delivery_status": _text(row.get(EXPORT_COLUMNS["delivery_status"])),
+                "failed_reason": _text(row.get(EXPORT_COLUMNS["failed_reason"]), fallback=""),
+                "delay_reason": _text(row.get(EXPORT_COLUMNS["delay_reason"]), fallback=""),
                 "created_at": created_at.isoformat() if created_at else None,
                 "returned_to_sender_at": returned_at.isoformat() if returned_at else None,
             }
@@ -935,6 +974,48 @@ def fetch_spx_export_records(
             except Exception:
                 return
 
+        def _handle_export_task_payload(payload: Dict[str, Any], source: str) -> None:
+            nonlocal captured_export_path, export_task_ready, latest_export_task_id
+            task_list = payload.get("data", {}).get("list", [])
+            if task_list:
+                current_task = task_list[0]
+                latest_export_task_id = current_task.get("task_id")
+                if current_task.get("task_status") == 4:
+                    export_task_ready = True
+                    network_debug_events.append(
+                        f"task_ready\t{latest_export_task_id}\t{current_task.get('file_id')}\t{current_task.get('success_count')}"
+                    )
+            download_urls = _extract_export_download_urls(payload)
+            network_debug_events.append(
+                f"{source}_task_payload\t{json.dumps(payload, ensure_ascii=True)[:4000]}"
+            )
+            if download_urls:
+                network_debug_events.append(
+                    f"task_urls\t{json.dumps(download_urls, ensure_ascii=True)}"
+                )
+            for download_url in download_urls:
+                download_response = context.request.get(download_url, timeout=min(timeout_ms, 30000))
+                if not download_response.ok:
+                    network_debug_events.append(
+                        f"task_download_failed\t{download_response.status}\t{download_url}"
+                    )
+                    continue
+                payload_bytes = download_response.body()
+                if not payload_bytes:
+                    network_debug_events.append(f"task_download_empty\t{download_url}")
+                    continue
+                extension = _guess_export_extension(
+                    download_response.headers.get("content-type", ""),
+                    download_url,
+                )
+                export_path = download_dir / f"spx_export_task{extension}"
+                export_path.write_bytes(payload_bytes)
+                captured_export_path = export_path
+                network_debug_events.append(
+                    f"task_download_saved\t{download_response.status}\t{download_url}\t{export_path.name}"
+                )
+                return
+
         def _handle_response(response: Any) -> None:
             nonlocal captured_export_path, export_task_ready, latest_export_task_id
             url = response.url
@@ -947,45 +1028,7 @@ def fetch_spx_export_records(
             if capture_enabled and "export_task_list" in lowered_url:
                 try:
                     payload = json.loads(response.body().decode("utf-8"))
-                    task_list = payload.get("data", {}).get("list", [])
-                    if task_list:
-                        current_task = task_list[0]
-                        latest_export_task_id = current_task.get("task_id")
-                        if current_task.get("task_status") == 4:
-                            export_task_ready = True
-                            network_debug_events.append(
-                                f"task_ready\t{latest_export_task_id}\t{current_task.get('file_id')}\t{current_task.get('success_count')}"
-                            )
-                    download_urls = _extract_export_download_urls(payload)
-                    network_debug_events.append(
-                        f"task_payload\t{json.dumps(payload, ensure_ascii=True)[:4000]}"
-                    )
-                    if download_urls:
-                        network_debug_events.append(
-                            f"task_urls\t{json.dumps(download_urls, ensure_ascii=True)}"
-                        )
-                    for download_url in download_urls:
-                        download_response = context.request.get(download_url, timeout=min(timeout_ms, 30000))
-                        if not download_response.ok:
-                            network_debug_events.append(
-                                f"task_download_failed\t{download_response.status}\t{download_url}"
-                            )
-                            continue
-                        payload_bytes = download_response.body()
-                        if not payload_bytes:
-                            network_debug_events.append(f"task_download_empty\t{download_url}")
-                            continue
-                        extension = _guess_export_extension(
-                            download_response.headers.get("content-type", ""),
-                            download_url,
-                        )
-                        export_path = download_dir / f"spx_export_task{extension}"
-                        export_path.write_bytes(payload_bytes)
-                        captured_export_path = export_path
-                        network_debug_events.append(
-                            f"task_download_saved\t{download_response.status}\t{download_url}\t{export_path.name}"
-                        )
-                        return
+                    _handle_export_task_payload(payload, "network")
                 except Exception as exc:
                     network_debug_events.append(f"task_parse_error\t{url}\t{exc}")
             if not capture_enabled or captured_export_path is not None:
@@ -993,6 +1036,32 @@ def fetch_spx_export_records(
             export_path = _save_response_export(response, download_dir)
             if export_path is not None:
                 captured_export_path = export_path
+
+        def _poll_export_task_list() -> None:
+            try:
+                result = page.evaluate(
+                    """async () => {
+                        const response = await fetch(
+                            'https://spx.co.id/shipment/order/logistic/order/v2/export_task_list',
+                            {
+                                method: 'POST',
+                                credentials: 'include',
+                                headers: {'content-type': 'application/json'},
+                                body: JSON.stringify({pageno: 1, count: 1000})
+                            }
+                        );
+                        return {status: response.status, text: await response.text()};
+                    }"""
+                )
+                network_debug_events.append(
+                    f"manual_task_poll\t{result.get('status')}"
+                )
+                if int(result.get("status", 0)) != 200:
+                    return
+                payload = json.loads(result.get("text", "{}"))
+                _handle_export_task_payload(payload, "manual")
+            except Exception as exc:
+                network_debug_events.append(f"manual_task_poll_error\t{exc}")
 
         page.on("request", _handle_request)
         page.on("response", _handle_response)
@@ -1167,7 +1236,8 @@ def fetch_spx_export_records(
             except PlaywrightTimeoutError:
                 captured_export_path = None
                 capture_enabled = True
-                deadline = time.time() + min(timeout_ms, 90000) / 1000.0
+                export_ready_timeout_s = int(os.getenv("SPX_EXPORT_READY_TIMEOUT_SECONDS", "600"))
+                deadline = time.time() + export_ready_timeout_s
                 next_retry_at = 0.0
                 while time.time() < deadline and export_path is None:
                     if captured_export_path is not None and captured_export_path.exists():
@@ -1192,6 +1262,7 @@ def fetch_spx_export_records(
                                 network_debug_events.append(
                                     f"retry_wait_task_pending\t{latest_export_task_id}"
                                 )
+                                _poll_export_task_list()
                                 next_retry_at = time.time() + 5
                                 continue
                             _click_result_download()

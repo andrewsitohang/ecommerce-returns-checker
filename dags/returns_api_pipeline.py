@@ -28,6 +28,8 @@ RETURNS_WEEKLY_TABLE = "fact_returns_weekly"
 RETURNS_REASON_TABLE = "fact_return_reason_weekly"
 RETURNS_DRIVER_TABLE = "fact_return_driver_weekly"
 
+CANCEL_KEYWORDS = ("cancel", "canceled", "cancelled", "batal", "dibatalkan")
+
 NORMALIZED_ORDER_COLUMNS = [
     "source_system",
     "order_id",
@@ -105,6 +107,11 @@ def _normalize_service_type(value: Any) -> str:
     if "standard" in lowered or "regular" in lowered:
         return "Standard"
     return text
+
+
+def _has_cancel_keyword(*values: Any) -> bool:
+    text = " ".join("" if value is None else str(value) for value in values).lower()
+    return any(keyword in text for keyword in CANCEL_KEYWORDS)
 
 
 def _to_number(value: Any) -> float:
@@ -506,10 +513,33 @@ def build_returns_mart() -> None:
     api1_orders: List[Dict[str, Any]] = []
     api2_orders = _normalize_api2_source_data(api2_source_mode, api2_payloads)
     returns_raw = pd.DataFrame(api2_orders)
+    if "delivery_status" not in returns_raw.columns:
+        returns_raw["delivery_status"] = ""
+    if "return_reason" not in returns_raw.columns:
+        returns_raw["return_reason"] = ""
+    if "failed_reason" not in returns_raw.columns:
+        returns_raw["failed_reason"] = ""
+    if "delay_reason" not in returns_raw.columns:
+        returns_raw["delay_reason"] = ""
+    returns_raw["is_cancelled"] = returns_raw.apply(
+        lambda row: 1
+        if _has_cancel_keyword(
+            row.get("delivery_status"),
+            row.get("return_reason"),
+            row.get("failed_reason"),
+            row.get("delay_reason"),
+        )
+        else 0,
+        axis=1,
+    )
+    returns_raw["eligible_shipment_flag"] = 1 - returns_raw["is_cancelled"]
 
     # staging tables
     _df_to_postgres(pd.DataFrame(api1_orders, columns=NORMALIZED_ORDER_COLUMNS), STG_API1_ORDERS, conn, STAGING_SCHEMA, replace=True)
-    _df_to_postgres(pd.DataFrame(api2_orders), STG_API2_ORDERS, conn, STAGING_SCHEMA, replace=True)
+    _df_to_postgres(returns_raw, STG_API2_ORDERS, conn, STAGING_SCHEMA, replace=True)
+
+    # Return rate denominator excludes cancelled shipments by business definition.
+    returns_raw = returns_raw[returns_raw["eligible_shipment_flag"] == 1].copy()
 
     returns_raw["event_date"] = pd.to_datetime(returns_raw["event_date"], errors="coerce")
     returns_raw["year"] = returns_raw["event_date"].dt.year
