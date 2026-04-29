@@ -79,7 +79,14 @@ EXPORT_COLUMN_ALIASES = {
 def _text(value: Any, fallback: str = "No Value") -> str:
     if value is None:
         return fallback
+    try:
+        if pd.isna(value):
+            return fallback
+    except TypeError:
+        pass
     text = str(value).strip()
+    if text.lower() in {"nan", "nat", "none", "null"}:
+        return fallback
     return text if text else fallback
 
 
