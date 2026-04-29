@@ -716,19 +716,30 @@ def _infer_return_flag_and_reason(row: pd.Series) -> tuple[int, str]:
     status_text = _text(row.get(EXPORT_COLUMNS["delivery_status"]), fallback="")
 
     cancel_keywords = ("cancel", "canceled", "cancelled", "batal", "dibatalkan")
-    return_keywords = ("return", "retur", "gagal", "failed", "ditolak")
     status_lower = status_text.lower()
     reason_text = f"{failed_reason} {delay_reason}".lower()
+    delivered_statuses = {"delivered"}
+    return_statuses = {"returned", "returning"}
+    failed_final_statuses = {"damaged", "lost"}
+    in_progress_statuses = {"in transit", "delivering", "pickup on hold", "on hold"}
+
     if any(key in f"{status_lower} {reason_text}" for key in cancel_keywords):
         return 0, "Cancelled"
-    is_return = bool(returned_at) or bool(failed_reason) or any(key in status_lower for key in return_keywords)
+
+    if status_lower in delivered_statuses:
+        return 0, "No Reason Provided"
+
+    if bool(returned_at) or status_lower in return_statuses:
+        return 1, failed_reason or delay_reason or status_text or "No Reason Provided"
+
+    if status_lower in failed_final_statuses:
+        return 1, failed_reason or delay_reason or status_text or "No Reason Provided"
+
+    if failed_reason and status_lower not in in_progress_statuses:
+        return 1, failed_reason
 
     if failed_reason:
-        return 1 if is_return else 0, failed_reason
-    if delay_reason and is_return:
-        return 1, delay_reason
-    if status_text and is_return:
-        return 1, status_text
+        return 0, failed_reason
     return 0, "No Reason Provided"
 
 

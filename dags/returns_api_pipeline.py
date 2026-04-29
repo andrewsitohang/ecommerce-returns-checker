@@ -29,6 +29,9 @@ RETURNS_REASON_TABLE = "fact_return_reason_weekly"
 RETURNS_DRIVER_TABLE = "fact_return_driver_weekly"
 
 CANCEL_KEYWORDS = ("cancel", "canceled", "cancelled", "batal", "dibatalkan")
+FINAL_SUCCESS_STATUSES = {"delivered"}
+FINAL_RETURN_STATUSES = {"returned"}
+FINAL_FAILED_STATUSES = {"damaged", "lost"}
 
 NORMALIZED_ORDER_COLUMNS = [
     "source_system",
@@ -112,6 +115,12 @@ def _normalize_service_type(value: Any) -> str:
 def _has_cancel_keyword(*values: Any) -> bool:
     text = " ".join("" if value is None else str(value) for value in values).lower()
     return any(keyword in text for keyword in CANCEL_KEYWORDS)
+
+
+def _is_final_non_cancel_status(status: Any) -> bool:
+    status_text = _normalize_text(status, fallback="").lower()
+    final_statuses = FINAL_SUCCESS_STATUSES | FINAL_RETURN_STATUSES | FINAL_FAILED_STATUSES
+    return status_text in final_statuses
 
 
 def _to_number(value: Any) -> float:
@@ -532,13 +541,19 @@ def build_returns_mart() -> None:
         else 0,
         axis=1,
     )
-    returns_raw["eligible_shipment_flag"] = 1 - returns_raw["is_cancelled"]
+    returns_raw["is_final_status"] = returns_raw["delivery_status"].apply(
+        lambda value: 1 if _is_final_non_cancel_status(value) else 0
+    )
+    returns_raw["eligible_shipment_flag"] = returns_raw.apply(
+        lambda row: 1 if row["is_cancelled"] == 0 and row["is_final_status"] == 1 else 0,
+        axis=1,
+    )
 
     # staging tables
     _df_to_postgres(pd.DataFrame(api1_orders, columns=NORMALIZED_ORDER_COLUMNS), STG_API1_ORDERS, conn, STAGING_SCHEMA, replace=True)
     _df_to_postgres(returns_raw, STG_API2_ORDERS, conn, STAGING_SCHEMA, replace=True)
 
-    # Return rate denominator excludes cancelled shipments by business definition.
+    # Return rate denominator includes only final non-cancel shipments.
     returns_raw = returns_raw[returns_raw["eligible_shipment_flag"] == 1].copy()
 
     returns_raw["event_date"] = pd.to_datetime(returns_raw["event_date"], errors="coerce")
