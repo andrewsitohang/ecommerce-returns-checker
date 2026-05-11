@@ -94,7 +94,11 @@ def _to_datetime(value: Any) -> Optional[datetime]:
     if value is None or str(value).strip() == "":
         return None
     try:
-        dt = pd.to_datetime(value, errors="coerce", dayfirst=True)
+        text = str(value).strip()
+        if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+            dt = pd.to_datetime(text, errors="coerce", format="%Y-%m-%d")
+        else:
+            dt = pd.to_datetime(value, errors="coerce", dayfirst=True)
     except Exception:
         return None
     if pd.isna(dt):
@@ -225,6 +229,49 @@ def _write_debug_artifacts(page: Any, output_dir: Path, prefix: str) -> None:
         pass
 
 
+def _write_session_debug(page: Any, output_dir: Path, prefix: str) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lines: List[str] = [f"debug_version\t{SPX_DOWNLOAD_DEBUG_VERSION}"]
+    try:
+        lines.append(f"url\t{page.url}")
+    except Exception:
+        lines.append("url\tUnavailable")
+    try:
+        lines.append(f"title\t{page.title()}")
+    except Exception:
+        lines.append("title\tUnavailable")
+    try:
+        cookies = page.context.cookies()
+        lines.append(f"cookie_count\t{len(cookies)}")
+        for cookie in cookies[:50]:
+            name = cookie.get("name", "")
+            domain = cookie.get("domain", "")
+            path = cookie.get("path", "")
+            secure = cookie.get("secure", False)
+            http_only = cookie.get("httpOnly", False)
+            value_preview = str(cookie.get("value", ""))[:24]
+            lines.append(
+                f"cookie\t{name}\tdomain={domain}\tpath={path}\tsecure={secure}\thttpOnly={http_only}\tvalue_preview={value_preview}"
+            )
+    except Exception as exc:
+        lines.append(f"cookie_error\t{exc}")
+    try:
+        storage_state = page.context.storage_state()
+        origins = storage_state.get("origins", [])
+        lines.append(f"storage_origin_count\t{len(origins)}")
+        for origin in origins[:20]:
+            origin_name = origin.get("origin", "")
+            local_storage = origin.get("localStorage", [])
+            lines.append(f"origin\t{origin_name}\tlocal_storage_items={len(local_storage)}")
+            for item in local_storage[:20]:
+                key = item.get("name", "")
+                value_preview = str(item.get("value", ""))[:80]
+                lines.append(f"local_storage\t{origin_name}\t{key}\t{value_preview}")
+    except Exception as exc:
+        lines.append(f"storage_error\t{exc}")
+    (output_dir / f"{prefix}.txt").write_text("\n".join(lines), encoding="utf-8")
+
+
 def _write_control_debug(page: Any, output_dir: Path, prefix: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     lines: List[str] = [f"debug_version\t{SPX_DOWNLOAD_DEBUG_VERSION}"]
@@ -306,6 +353,28 @@ def _wait_for_first_visible(page: Any, selectors: List[str], timeout_ms: int) ->
 
 def _is_login_url(url: str) -> bool:
     return "authenticate/login" in url or "account.spx.co.id" in url
+
+
+def _is_public_spx_page(page: Any) -> bool:
+    url = (page.url or "").lower()
+    try:
+        title = (page.title() or "").lower()
+    except Exception:
+        title = ""
+    return (
+        "spx-admin/order/trackings" not in url
+        and "spx indonesia" in title
+        and "tracking" in title
+    )
+
+
+def _describe_page_state(page: Any) -> str:
+    url = page.url
+    try:
+        title = page.title()
+    except Exception:
+        title = "Unavailable"
+    return f"URL: {url}. Title: {title}."
 
 
 def _wait_for_page_ready(page: Any, timeout_ms: int, *, allow_networkidle_timeout: bool = True) -> None:
@@ -1127,12 +1196,30 @@ def fetch_spx_export_records(
                 page.wait_for_url(lambda url: not _is_login_url(url), timeout=timeout_ms)
             except Exception as exc:
                 _write_debug_artifacts(page, download_dir, "spx_login_failed")
+                _write_session_debug(page, download_dir, "spx_login_failed_session")
                 raise RuntimeError(
                     f"SPX login did not complete. Still on URL: {page.url}. Debug files saved under {download_dir}."
                 ) from exc
 
+            _write_session_debug(page, download_dir, "spx_post_login_session")
             page.goto(tracking_url, wait_until="domcontentloaded")
             _wait_for_page_ready(page, timeout_ms)
+            _write_session_debug(page, download_dir, "spx_post_tracking_nav_session")
+
+        def _ensure_tracking_page_state(*, context: str) -> None:
+            if _is_login_url(page.url):
+                _write_session_debug(page, download_dir, "spx_login_page_session")
+                raise RuntimeError(
+                    f"SPX session is on login page during {context}. {_describe_page_state(page)}"
+                )
+            if _is_public_spx_page(page):
+                _write_debug_artifacts(page, download_dir, "spx_public_page_debug")
+                _write_session_debug(page, download_dir, "spx_public_page_session")
+                raise RuntimeError(
+                    f"SPX admin tracking page not reached during {context}. "
+                    f"Landed on public SPX page instead. {_describe_page_state(page)} "
+                    f"Debug files saved under {download_dir}."
+                )
 
         page.goto(tracking_url, wait_until="domcontentloaded")
         _wait_for_page_ready(page, timeout_ms)
@@ -1148,16 +1235,21 @@ def fetch_spx_export_records(
 
         if _is_login_url(page.url):
             _write_debug_artifacts(page, download_dir, "spx_login_failed")
+            _write_session_debug(page, download_dir, "spx_login_failed_session")
             raise RuntimeError(
                 f"SPX login did not complete after retries. Still on URL: {page.url}. Debug files saved under {download_dir}."
             )
 
+        _ensure_tracking_page_state(context="initial tracking load")
+
         def _apply_date_filter() -> None:
+            _ensure_tracking_page_state(context="date filter")
             _fill_first_matching(page, start_date_selectors, _to_date_text(start_date), timeout_ms)
             _fill_first_matching(page, end_date_selectors, _to_date_text(end_date), timeout_ms)
             try:
                 _wait_for_first_visible(page, apply_selectors, timeout_ms).click()
                 _wait_for_page_ready(page, timeout_ms)
+                _ensure_tracking_page_state(context="date filter apply")
             except Exception:
                 pass
 
@@ -1179,7 +1271,7 @@ def fetch_spx_export_records(
                 _write_debug_artifacts(page, download_dir, "spx_date_filter_debug")
                 _flush_network_debug()
                 raise RuntimeError(
-                    f"Unable to apply SPX date filter. Current URL: {page.url}. "
+                    f"Unable to apply SPX date filter. {_describe_page_state(page)} "
                     f"Checked start selectors={start_date_selectors}, end selectors={end_date_selectors}, "
                     f"apply selectors={apply_selectors}. "
                     f"Debug files saved under {download_dir}."
@@ -1187,6 +1279,8 @@ def fetch_spx_export_records(
 
         if _is_login_url(page.url):
             _perform_login_flow()
+
+        _ensure_tracking_page_state(context="tracking table wait")
 
         try:
             _wait_for_first_visible(page, tracking_ready_selectors, timeout_ms)
@@ -1204,7 +1298,7 @@ def fetch_spx_export_records(
             else:
                 _write_debug_artifacts(page, download_dir, "spx_tracking_debug")
                 raise RuntimeError(
-                    f"Unable to find SPX tracking table. Current URL: {page.url}. "
+                    f"Unable to find SPX tracking table. {_describe_page_state(page)} "
                     f"Checked ready selectors={tracking_ready_selectors} and table selectors={tracking_table_selectors}. "
                     f"Debug files saved under {download_dir}."
                 ) from exc
