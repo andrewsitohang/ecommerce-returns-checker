@@ -19,10 +19,9 @@ RAW_SCHEMA = "raw"
 STAGING_SCHEMA = "staging"
 MART_SCHEMA = "mart"
 
-RAW_API1_TABLE = "api1_payloads"
-RAW_API2_TABLE = "api2_payloads"
-STG_API1_ORDERS = "stg_api1_orders"
-STG_API2_ORDERS = "stg_api2_orders"
+RAW_SPX_WEB_TABLE = "spx_web_order_payloads"
+RAW_EVERPRO_API_TABLE = "everpro_api_order_payloads"
+STG_RETURN_SHIPMENTS_TABLE = "stg_return_shipments"
 
 RETURNS_WEEKLY_TABLE = "fact_returns_weekly"
 RETURNS_REASON_TABLE = "fact_return_reason_weekly"
@@ -56,6 +55,13 @@ def _env(name: str, default: Optional[str] = None) -> str:
     if value is None:
         raise ValueError(f"Missing required environment variable: {name}")
     return value
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _current_quarter_range(today: Optional[date] = None) -> tuple[str, str]:
@@ -123,15 +129,21 @@ def _is_final_non_cancel_status(status: Any) -> bool:
     return status_text in final_statuses
 
 
+def _is_eligible_shipment(source_system: Any, delivery_status: Any, is_cancelled: Any) -> int:
+    if int(is_cancelled or 0) == 1:
+        return 0
+    source_text = _normalize_text(source_system, fallback="").lower()
+    status_text = _normalize_text(delivery_status, fallback="").lower()
+    if source_text == "everpro_api":
+        return 1 if status_text in {"delivered", "returned"} else 0
+    return 1 if _is_final_non_cancel_status(delivery_status) else 0
+
+
 def _to_number(value: Any) -> float:
     try:
         return float(str(value).replace(",", "").strip())
     except Exception:
         return 0.0
-
-
-def _format_decimal_comma(series: pd.Series) -> pd.Series:
-    return series.map(lambda x: f"{x:.6f}".replace(".", ",") if pd.notna(x) else "")
 
 
 def _ensure_schema(conn: psycopg2.extensions.connection, schema: str) -> None:
@@ -265,82 +277,113 @@ def _fetch_paged(url: str, params: Dict[str, Any], headers: Dict[str, str]) -> L
 
 
 def _extract_api_list(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    # API1: data.data.orders
+    # SPX exported payload fallback
     orders = _get_nested(payload, ["data", "data", "orders"])
     if isinstance(orders, list):
         return orders
-    # API2: data.data.list
+    # Everpro: data.orders
+    orders = _get_nested(payload, ["data", "orders"])
+    if isinstance(orders, list):
+        return orders
+    # Nested payload fallback
     items = _get_nested(payload, ["data", "data", "list"])
     if isinstance(items, list):
         return items
     return []
 
 
-def _get_api2_source_mode() -> str:
-    return os.getenv("API2_SOURCE_MODE", "api").strip().lower()
+def _get_enabled_return_sources() -> List[str]:
+    enabled_sources: List[str] = []
+
+    # Preferred explicit config.
+    if _env_bool("SPX_WEB_SOURCE_ENABLED", default=False):
+        enabled_sources.append("spx_web")
+    if _env_bool("EVERPRO_API_SOURCE_ENABLED", default=False):
+        enabled_sources.append("everpro_api")
+
+    if enabled_sources:
+        return enabled_sources
+
+    # Backward-compatible fallback.
+    raw_value = os.getenv("API2_SOURCE_MODE", "").strip().lower()
+    if raw_value:
+        parts = [part.strip() for part in raw_value.split(",")]
+        return [part for part in parts if part]
+
+    # Safe default for older envs that only configured SPX.
+    return ["spx_web"]
 
 
-def _fetch_api2_source_data(start_date: str, end_date: str) -> Dict[str, Any]:
-    source_mode = _get_api2_source_mode()
-    if source_mode == "spx_web":
-        records = fetch_spx_export_records(
-            start_date,
-            end_date,
-            headless=os.getenv("SPX_WEB_HEADLESS", "true").lower() == "true",
-            keep_download=False,
-            output_dir=os.getenv("SPX_WEB_DOWNLOAD_DIR"),
-        )
-        return {"source_mode": source_mode, "data": records}
-
-    # Legacy API2 path intentionally disabled.
-    # api2_url = _env("API2_URL")
-    # api2_token = os.getenv("API2_TOKEN", "")
-    # api2_params = {
-    #     "page": int(os.getenv("API2_PAGE", "1")),
-    #     "limit": int(os.getenv("API2_LIMIT", "100")),
-    #     "start_date": os.getenv("API2_START_DATE", start_date),
-    #     "end_date": os.getenv("API2_END_DATE", end_date),
-    # }
-    # api2_headers = {"Authorization": api2_token} if api2_token else {}
-    # api2_payloads = _fetch_paged(api2_url, api2_params, api2_headers)
-    # return {"source_mode": source_mode, "data": api2_payloads}
-    raise ValueError("API2_SOURCE_MODE must be 'spx_web'; legacy API2 mode is disabled.")
+def _everpro_headers() -> Dict[str, str]:
+    token = _env("EVERPRO_API_TOKEN").strip()
+    return {
+        "accept": "application/json, text/plain, */*",
+        "authorization": f"Bearer {token}",
+        "referer": "https://customer.everpro.id/order",
+        "user-agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+        ),
+    }
 
 
-def _decode_api2_payload_blob(payload_text: str) -> tuple[str, List[Dict[str, Any]]]:
-    payload_obj = json.loads(payload_text)
-    if isinstance(payload_obj, dict) and "source_mode" in payload_obj and "data" in payload_obj:
-        return str(payload_obj["source_mode"]), list(payload_obj["data"])
-    return "api", list(payload_obj)
+def _fetch_everpro_orders(start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    base_url = os.getenv("EVERPRO_API_BASE_URL", "https://customer.everpro.id").strip().rstrip("/")
+    api_url = f"{base_url}/api/logistic/v2/public/orders"
+    headers = _everpro_headers()
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    params = {
+        "page": int(os.getenv("EVERPRO_API_PAGE", "1")),
+        "limit": int(os.getenv("EVERPRO_API_LIMIT", os.getenv("API2_LIMIT", "100"))),
+        "sort_by": "",
+        "order_status": os.getenv("EVERPRO_ORDER_STATUS", "all"),
+        "status": "",
+        "filter_order": "",
+        "courier": "",
+        "start_date": start_date,
+        "end_date": end_date,
+        "start_epoch": int(start_dt.timestamp()),
+        "end_epoch": int(end_dt.timestamp()),
+        "created_by": "",
+        "shipment_type": "",
+        "payment_type": "",
+        "sender": "",
+        "dropshipper_name": "",
+        "receiver": "",
+        "no_ref": "",
+        "origin_postal_code": "",
+        "destination_postal_code": "",
+        "origin_city": "",
+        "destination_city": "",
+        "over_sla_status": "",
+        "return_lost_confirmation": "",
+        "channel": "",
+    }
+    return _fetch_paged(api_url, params, headers)
 
 
-def fetch_api_raw() -> None:
-    q_start, q_end = _current_quarter_range()
+def _table_exists(conn: psycopg2.extensions.connection, schema: str, table_name: str) -> bool:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = %s AND table_name = %s
+        """,
+        (schema, table_name),
+    )
+    exists = cur.fetchone() is not None
+    cur.close()
+    return exists
 
-    # Legacy API1 path intentionally disabled.
-    # api1_url = _env("API1_URL")
-    # api1_token = os.getenv("API1_TOKEN", "")
-    # api1_params = {
-    #     "page": int(os.getenv("API1_PAGE", "1")),
-    #     "limit": int(os.getenv("API1_LIMIT", "100")),
-    #     "order_status": os.getenv("API1_ORDER_STATUS", "all"),
-    #     "filter_order": os.getenv("API1_FILTER_ORDER", ""),
-    #     "courier": os.getenv("API1_COURIER", ""),
-    #     "start_date": os.getenv("API1_START_DATE", q_start),
-    #     "end_date": os.getenv("API1_END_DATE", q_end),
-    # }
-    # api1_headers = {"Authorization": api1_token} if api1_token else {}
-    # api1_payloads = _fetch_paged(api1_url, api1_params, api1_headers)
-    api1_payloads: List[Dict[str, Any]] = []
-    api2_payloads = _fetch_api2_source_data(q_start, q_end)
 
-    # persist raw payloads to DB (raw schema)
+def _write_raw_payload(table_name: str, payload_obj: Any) -> None:
     db_host = _env("DB_HOST")
     db_port = _env("DB_PORT")
     db_name = _env("DB_NAME")
     db_user = _env("DB_USER")
     db_password = _env("DB_PASSWORD")
-
     conn = psycopg2.connect(
         host=db_host,
         port=db_port,
@@ -349,122 +392,148 @@ def fetch_api_raw() -> None:
         password=db_password,
     )
     _ensure_schema(conn, RAW_SCHEMA)
-    api1_df = pd.DataFrame(
-        [{"run_ts": datetime.utcnow().isoformat(), "payload": json.dumps(api1_payloads, ensure_ascii=False)}]
+    payload_df = pd.DataFrame(
+        [{"run_ts": datetime.utcnow().isoformat(), "payload": json.dumps(payload_obj, ensure_ascii=False)}]
     )
-    api2_df = pd.DataFrame(
-        [{"run_ts": datetime.utcnow().isoformat(), "payload": json.dumps(api2_payloads, ensure_ascii=False)}]
-    )
-    _df_to_postgres(api1_df, RAW_API1_TABLE, conn, RAW_SCHEMA, replace=True)
-    _df_to_postgres(api2_df, RAW_API2_TABLE, conn, RAW_SCHEMA, replace=True)
+    _df_to_postgres(payload_df, table_name, conn, RAW_SCHEMA, replace=True)
     conn.close()
 
 
-def _normalize_api1_orders(payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    orders: List[Dict[str, Any]] = []
+def _read_raw_payload(table_name: str) -> List[Dict[str, Any]]:
+    db_host = _env("DB_HOST")
+    db_port = _env("DB_PORT")
+    db_name = _env("DB_NAME")
+    db_user = _env("DB_USER")
+    db_password = _env("DB_PASSWORD")
+    conn = psycopg2.connect(
+        host=db_host,
+        port=db_port,
+        dbname=db_name,
+        user=db_user,
+        password=db_password,
+    )
+    if not _table_exists(conn, RAW_SCHEMA, table_name):
+        conn.close()
+        return []
+    cur = conn.cursor()
+    cur.execute(f'SELECT payload FROM "{RAW_SCHEMA}"."{table_name}" ORDER BY run_ts DESC LIMIT 1')
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        return []
+    payload_obj = json.loads(row[0])
+    return payload_obj if isinstance(payload_obj, list) else []
+
+
+def extract_spx_web_raw() -> None:
+    q_start, q_end = _current_quarter_range()
+    enabled_sources = _get_enabled_return_sources()
+    if "spx_web" not in enabled_sources:
+        _write_raw_payload(RAW_SPX_WEB_TABLE, [])
+        return
+    records = fetch_spx_export_records(
+        q_start,
+        q_end,
+        headless=os.getenv("SPX_WEB_HEADLESS", "true").lower() == "true",
+        keep_download=False,
+        output_dir=os.getenv("SPX_WEB_DOWNLOAD_DIR"),
+    )
+    _write_raw_payload(RAW_SPX_WEB_TABLE, records)
+
+
+def extract_everpro_api_raw() -> None:
+    q_start, q_end = _current_quarter_range()
+    enabled_sources = _get_enabled_return_sources()
+    if "everpro_api" not in enabled_sources:
+        _write_raw_payload(RAW_EVERPRO_API_TABLE, [])
+        return
+    payloads = _fetch_everpro_orders(q_start, q_end)
+    _write_raw_payload(RAW_EVERPRO_API_TABLE, payloads)
+
+
+def _build_everpro_status_map(payloads: List[Dict[str, Any]]) -> Dict[str, str]:
+    status_map: Dict[str, str] = {}
+    for payload in payloads:
+        statuses = _get_nested(payload, ["data", "statuses"], default=[])
+        if not isinstance(statuses, list):
+            continue
+        for status in statuses:
+            if not isinstance(status, dict):
+                continue
+            status_id = status.get("id")
+            status_name = str(status.get("name") or "").strip()
+            if status_id is None or not status_name:
+                continue
+            status_map[str(status_id)] = status_name
+    return status_map
+
+
+def _normalize_everpro_orders(payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    status_map = _build_everpro_status_map(payloads)
+    final_success_statuses = {"COMPLETED"}
+    final_return_statuses = {"RETURN", "REJECTED"}
+    final_failure_statuses = {"LOST / BROKEN"}
     for payload in payloads:
         for order in _extract_api_list(payload):
-            shipment = order.get("shipment", {}) or {}
-            logistic = order.get("logistic", {}) or shipment.get("logistic", {}) or {}
+            shipper = order.get("shipper", {}) or {}
+            shipper_addr = shipper.get("address_detail", {}) or {}
             receiver = order.get("receiver", {}) or {}
             receiver_addr = receiver.get("address_detail", {}) or {}
+            shipment = order.get("shipment", {}) or {}
+            logistic = order.get("logistic", {}) or {}
+            cod = order.get("cod", {}) or {}
 
-            status_name = _normalize_text(shipment.get("status_name") or order.get("status_name"))
-            status_upper = status_name.upper()
-            # API1 return detection: keyword-based with explicit exclusions.
-            return_keywords = [
-                "RETURN",
-                "RETUR",
-                "RTS",
-                "RETURN TO SENDER",
-                "RECEIVER REFUSED TO ACCEPT",
-                "CANCELLED BY COURIER (REFUSED)",
-                "DELIVERY FAILED - OUT OF DELIVERY ATTEMPTS",
-                "RETURN - ITEM DAMAGED",
-                "CONSIGNEE UNREACHABLE - RETURN",
-                "GAGAL ANTAR",
-                "DITOLAK",
-            ]
-            non_return_keywords = [
-                "IN PROCESS RETURN",
-                "PEMBELI MENJADWALKAN ULANG WAKTU PENGIRIMAN",
-                "PENJUAL BELUM SELESAI MENYIAPKAN PESANAN",
-            ]
-            is_return = any(k in status_upper for k in return_keywords) and not any(
-                k in status_upper for k in non_return_keywords
-            )
-            if status_upper in ("RETURN", "RETUR"):
-                status_name = "No Reason Provided"
-            created_at = _to_datetime(order.get("created_at"))
-            pickup_time = _to_datetime(shipment.get("pickup_time_date") or shipment.get("pickup_time"))
-            event_dt = created_at or pickup_time
+            event_dt = _to_datetime(order.get("created_at"))
+            rts_reasons = order.get("rts_reasons") or []
+            if isinstance(rts_reasons, list):
+                return_reason = " | ".join(str(reason).strip() for reason in rts_reasons if str(reason).strip())
+            else:
+                return_reason = _normalize_text(rts_reasons, fallback="")
+            rts_status = _normalize_text(order.get("rts_status"), fallback="")
+            shipment_status = _normalize_text(shipment.get("status"), fallback="")
+            everpro_status_name = status_map.get(shipment_status, shipment_status).strip().upper()
 
-            is_cod = order.get("is_cod")
-            cod_value = _to_number(order.get("cod")) if order.get("cod") is not None else _to_number(shipment.get("cod"))
-            payment_method = _normalize_text(shipment.get("payment_method") or order.get("payment_method") or shipment.get("payment_method_rts"))
+            if everpro_status_name in final_success_statuses:
+                normalized_status = "Delivered"
+            elif everpro_status_name in final_return_statuses:
+                normalized_status = "Returned"
+            elif everpro_status_name == "CANCELLED":
+                normalized_status = "Cancelled"
+            elif everpro_status_name in final_failure_statuses:
+                normalized_status = "Lost"
+            else:
+                normalized_status = everpro_status_name.title() if everpro_status_name else "Unknown"
 
-            orders.append(
+            is_return = normalized_status == "Returned"
+            failed_reason = ""
+            if normalized_status in {"Returned", "Lost"}:
+                failed_reason = return_reason or rts_status or everpro_status_name
+
+            items.append(
                 {
-                    "source_system": "api1",
+                    "source_system": "everpro_api",
                     "order_id": _normalize_text(order.get("awb_number") or order.get("shipment_order_no")),
                     "event_date": event_dt.date() if event_dt else None,
                     "province": _normalize_text(receiver_addr.get("province")),
                     "city": _normalize_text(receiver_addr.get("city")),
-                    "expedition": _normalize_text(logistic.get("name") or shipment.get("logistic_name")),
+                    "expedition": _normalize_text(logistic.get("name")),
                     "service_type": _normalize_service_type(
-                        logistic.get("rate_name") or logistic.get("rate_type_name")
+                        logistic.get("rate_type_name") or logistic.get("rate_name") or shipment.get("type")
                     ),
-                    "payment_method": payment_method,
-                    "cod_type": "COD" if is_cod or cod_value > 0 else "NON-COD",
-                    "order_value": _to_number(shipment.get("total_price") or shipment.get("total") or order.get("total")),
-                    "cod_value": cod_value,
-                    "shipping_fee": _to_number(shipment.get("fee") or shipment.get("shipping_fee")),
+                    "payment_method": "COD" if order.get("is_cod") else "NON-COD",
+                    "cod_type": "COD" if order.get("is_cod") else "NON-COD",
+                    "order_value": _to_number(cod.get("total") or order.get("package", {}).get("price")),
+                    "cod_value": _to_number(cod.get("total")) if order.get("is_cod") else 0.0,
+                    "shipping_fee": _to_number(shipment.get("total_price") or shipment.get("price")),
                     "return_flag": 1 if is_return else 0,
-                    "return_reason": status_name if is_return else "No Reason Provided",
-                }
-            )
-    return orders
-
-
-def _normalize_api2_orders(payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
-    for payload in payloads:
-        for order in _extract_api_list(payload):
-            base_info = order.get("base_info", {}) or {}
-            order_info = order.get("order_info", {}) or {}
-            deliver_info = order.get("deliver_info", {}) or {}
-            tracking_info = order.get("tracking_info", {}) or {}
-            finance_info = order.get("finance_info", {}) or {}
-
-            event_dt = _to_datetime(order_info.get("ctime"))
-            returning_start = tracking_info.get("returning_start_time")
-            returned_time = tracking_info.get("returned_time")
-            return_flag = 1 if (returning_start or returned_time) else 0
-            raw_reason = tracking_info.get("latest_tracking_reason")
-            if raw_reason in (None, "", "0", 0):
-                raw_reason = tracking_info.get("reason_code")
-            reason_text = _normalize_text(raw_reason)
-            if reason_text in ("0", "unknown", "Unknown", "None"):
-                reason_text = "No Reason Provided"
-            if reason_text.isdigit():
-                reason_text = f"Reason Code {reason_text}"
-
-            items.append(
-                {
-                    "source_system": "api2",
-                    "order_id": _normalize_text(order_info.get("order_sn") or order_info.get("order_id")),
-                    "event_date": event_dt.date() if event_dt else None,
-                    "province": _normalize_text(deliver_info.get("deliver_state")),
-                    "city": _normalize_text(deliver_info.get("deliver_city")),
-                    "expedition": _normalize_text(base_info.get("three_pl_name") or "SPX"),
-                    "service_type": _normalize_service_type(base_info.get("product_name")),
-                    "payment_method": _normalize_text(_get_nested(order, ["fulfillment_info", "payment_method_rts"]) or "unknown"),
-                    "cod_type": "COD" if _to_number(finance_info.get("cod_service_fee") or order.get("cod_amount")) > 0 else "NON-COD",
-                    "order_value": _to_number(finance_info.get("actual_shipping_fee") or finance_info.get("estimated_shipping_fee") or order.get("cod_amount")),
-                    "cod_value": _to_number(order.get("cod_amount") or finance_info.get("cod_service_fee")),
-                    "shipping_fee": _to_number(finance_info.get("actual_shipping_fee")),
-                    "return_flag": return_flag,
-                    "return_reason": reason_text if return_flag else "No Reason Provided",
+                    "return_reason": return_reason or rts_status or failed_reason or "No Reason Provided",
+                    "delivery_status": normalized_status,
+                    "raw_delivery_status": shipment_status,
+                    "failed_reason": failed_reason,
+                    "delay_reason": "",
+                    "sender_province": _normalize_text(shipper_addr.get("province")),
                 }
             )
     return items
@@ -488,10 +557,12 @@ def _normalize_api2_source_data(source_mode: str, data: List[Dict[str, Any]]) ->
             normalized["expedition"] = _normalize_text(normalized.get("expedition"), fallback="SPX")
             records.append(normalized)
         return records
-    return _normalize_api2_orders(data)
+    if source_mode == "everpro_api":
+        return _normalize_everpro_orders(data)
+    raise ValueError(f"Unsupported normalization source mode: {source_mode}")
 
 
-def build_returns_mart() -> None:
+def build_returns_reporting_tables() -> None:
     db_host = _env("DB_HOST")
     db_port = _env("DB_PORT")
     db_name = _env("DB_NAME")
@@ -509,19 +580,18 @@ def build_returns_mart() -> None:
     _ensure_schema(conn, STAGING_SCHEMA)
     _ensure_schema(conn, MART_SCHEMA)
 
-    # load raw payloads (latest row)
-    cur = conn.cursor()
-    cur.execute(f'SELECT payload FROM "{RAW_SCHEMA}"."{RAW_API1_TABLE}" ORDER BY run_ts DESC LIMIT 1')
-    api1_payloads = json.loads(cur.fetchone()[0])
-    cur.execute(f'SELECT payload FROM "{RAW_SCHEMA}"."{RAW_API2_TABLE}" ORDER BY run_ts DESC LIMIT 1')
-    api2_source_mode, api2_payloads = _decode_api2_payload_blob(cur.fetchone()[0])
-    cur.close()
+    spx_payloads = _read_raw_payload(RAW_SPX_WEB_TABLE)
+    everpro_payloads = _read_raw_payload(RAW_EVERPRO_API_TABLE)
 
-    # Legacy API1 normalization intentionally disabled.
-    # api1_orders = _normalize_api1_orders(api1_payloads)
-    api1_orders: List[Dict[str, Any]] = []
-    api2_orders = _normalize_api2_source_data(api2_source_mode, api2_payloads)
+    api2_orders: List[Dict[str, Any]] = []
+    api2_orders.extend(_normalize_api2_source_data("spx_web", spx_payloads))
+    api2_orders.extend(_normalize_api2_source_data("everpro_api", everpro_payloads))
     returns_raw = pd.DataFrame(api2_orders)
+    if returns_raw.empty:
+        returns_raw = pd.DataFrame(
+            columns=NORMALIZED_ORDER_COLUMNS
+            + ["delivery_status", "raw_delivery_status", "failed_reason", "delay_reason", "sender_province"]
+        )
     if "delivery_status" not in returns_raw.columns:
         returns_raw["delivery_status"] = ""
     if "return_reason" not in returns_raw.columns:
@@ -545,13 +615,16 @@ def build_returns_mart() -> None:
         lambda value: 1 if _is_final_non_cancel_status(value) else 0
     )
     returns_raw["eligible_shipment_flag"] = returns_raw.apply(
-        lambda row: 1 if row["is_cancelled"] == 0 and row["is_final_status"] == 1 else 0,
+        lambda row: _is_eligible_shipment(
+            row.get("source_system"),
+            row.get("delivery_status"),
+            row.get("is_cancelled"),
+        ),
         axis=1,
     )
 
-    # staging tables
-    _df_to_postgres(pd.DataFrame(api1_orders, columns=NORMALIZED_ORDER_COLUMNS), STG_API1_ORDERS, conn, STAGING_SCHEMA, replace=True)
-    _df_to_postgres(returns_raw, STG_API2_ORDERS, conn, STAGING_SCHEMA, replace=True)
+    # staging table
+    _df_to_postgres(returns_raw, STG_RETURN_SHIPMENTS_TABLE, conn, STAGING_SCHEMA, replace=True)
 
     # Return rate denominator includes only final non-cancel shipments.
     returns_raw = returns_raw[returns_raw["eligible_shipment_flag"] == 1].copy()
@@ -718,7 +791,7 @@ def build_returns_mart() -> None:
     conn.close()
 
 
-def quality_check_outputs() -> None:
+def validate_returns_outputs() -> None:
     _env("DB_HOST")
     _env("DB_PORT")
     _env("DB_NAME")
@@ -728,25 +801,30 @@ def quality_check_outputs() -> None:
 
 with DAG(
     dag_id="returns_api_weekly",
-    description="Fetch API data and build weekly return analytics for Tableau",
+    description="Weekly return shipment pipeline for SPX web scraping and Everpro API sources",
     schedule="0 1 * * 1",
     start_date=datetime(2025, 1, 1),
     catchup=False,
-    tags=["etl", "api", "returns", "tableau"],
+    tags=["etl", "returns", "spx", "everpro", "analytics"],
 ) as dag:
-    fetch_raw = PythonOperator(
-        task_id="fetch_api_raw",
-        python_callable=fetch_api_raw,
+    extract_spx_web = PythonOperator(
+        task_id="extract_spx_web_shipments",
+        python_callable=extract_spx_web_raw,
     )
 
-    build_mart = PythonOperator(
-        task_id="build_returns_mart",
-        python_callable=build_returns_mart,
+    extract_everpro_api = PythonOperator(
+        task_id="extract_everpro_api_orders",
+        python_callable=extract_everpro_api_raw,
     )
 
-    validate = PythonOperator(
-        task_id="quality_check_outputs",
-        python_callable=quality_check_outputs,
+    build_reporting_tables = PythonOperator(
+        task_id="build_returns_reporting_tables",
+        python_callable=build_returns_reporting_tables,
     )
 
-    fetch_raw >> build_mart >> validate
+    validate_outputs = PythonOperator(
+        task_id="validate_returns_outputs",
+        python_callable=validate_returns_outputs,
+    )
+
+    [extract_spx_web, extract_everpro_api] >> build_reporting_tables >> validate_outputs
