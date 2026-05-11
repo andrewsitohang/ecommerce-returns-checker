@@ -234,20 +234,39 @@ def _fetch_paged(url: str, params: Dict[str, Any], headers: Dict[str, str]) -> L
     max_pages = int(os.getenv("API_MAX_PAGES", "50"))
     sleep_seconds = float(os.getenv("API_RATE_SLEEP", "1.0"))
     max_retries = int(os.getenv("API_MAX_RETRIES", "5"))
+    max_network_retries = int(os.getenv("API_NETWORK_MAX_RETRIES", str(max_retries)))
     fatal_on_5xx = os.getenv("API_FATAL_ON_5XX", "false").lower() == "true"
     results: List[Dict[str, Any]] = []
+
+    def _request_page(request_params: Dict[str, Any]) -> requests.Response:
+        last_error: Optional[Exception] = None
+        for attempt in range(max_network_retries + 1):
+            try:
+                return requests.get(url, params=request_params, headers=headers, timeout=60)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                last_error = exc
+                if attempt >= max_network_retries:
+                    break
+                retry_delay = min(sleep_seconds * (2 ** attempt), 20.0)
+                print(
+                    f"Retrying API request after network error on page={request_params.get('page')} "
+                    f"attempt={attempt + 1}/{max_network_retries} delay={retry_delay:.1f}s error={exc}"
+                )
+                time.sleep(retry_delay)
+        assert last_error is not None
+        raise last_error
 
     while True:
         if page > max_pages:
             break
         params["page"] = page
         params["limit"] = limit
-        resp = requests.get(url, params=params, headers=headers, timeout=60)
+        resp = _request_page(params.copy())
         if resp.status_code == 429:
             # simple backoff on rate limit
             for attempt in range(max_retries):
                 time.sleep(sleep_seconds * (attempt + 1))
-                resp = requests.get(url, params=params, headers=headers, timeout=60)
+                resp = _request_page(params.copy())
                 if resp.status_code != 429:
                     break
         if 500 <= resp.status_code < 600:
@@ -255,7 +274,7 @@ def _fetch_paged(url: str, params: Dict[str, Any], headers: Dict[str, str]) -> L
             last_status = resp.status_code
             for attempt in range(max_retries):
                 time.sleep(sleep_seconds * (attempt + 1))
-                resp = requests.get(url, params=params, headers=headers, timeout=60)
+                resp = _request_page(params.copy())
                 if resp.status_code < 500:
                     break
                 last_status = resp.status_code
