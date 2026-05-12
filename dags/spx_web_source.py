@@ -895,7 +895,24 @@ def load_spx_export_records(path: str | Path) -> List[Dict[str, Any]]:
     return records
 
 
-def fetch_spx_export_records(
+def _split_date_chunks(start_date: str, end_date: str, chunk_days: int) -> List[tuple[str, str]]:
+    start_dt = _to_datetime(start_date)
+    end_dt = _to_datetime(end_date)
+    if not start_dt or not end_dt:
+        raise ValueError(f"Invalid SPX date range: start_date={start_date}, end_date={end_date}")
+    if start_dt.date() > end_dt.date():
+        raise ValueError(f"SPX start_date must be <= end_date: {start_date} > {end_date}")
+    chunks: List[tuple[str, str]] = []
+    current_start = start_dt.date()
+    final_end = end_dt.date()
+    while current_start <= final_end:
+        current_end = min(current_start + pd.Timedelta(days=chunk_days - 1), final_end)
+        chunks.append((current_start.isoformat(), current_end.isoformat()))
+        current_start = current_end + pd.Timedelta(days=1)
+    return chunks
+
+
+def _fetch_spx_export_records_single_range(
     start_date: str,
     end_date: str,
     *,
@@ -1423,3 +1440,56 @@ def fetch_spx_export_records(
     if target_dir_ctx is not None:
         target_dir_ctx.cleanup()
     return records
+
+
+def fetch_spx_export_records(
+    start_date: str,
+    end_date: str,
+    *,
+    headless: Optional[bool] = None,
+    keep_download: bool = False,
+    output_dir: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    chunk_days = int(os.getenv("SPX_WEB_DATE_CHUNK_DAYS", "31"))
+    if chunk_days <= 0:
+        raise ValueError(f"SPX_WEB_DATE_CHUNK_DAYS must be > 0, got {chunk_days}")
+
+    chunks = _split_date_chunks(start_date, end_date, chunk_days)
+    if len(chunks) == 1:
+        return _fetch_spx_export_records_single_range(
+            start_date,
+            end_date,
+            headless=headless,
+            keep_download=keep_download,
+            output_dir=output_dir,
+        )
+
+    all_records: List[Dict[str, Any]] = []
+    for idx, (chunk_start, chunk_end) in enumerate(chunks, start=1):
+        chunk_output_dir = output_dir
+        if output_dir:
+            chunk_output_dir = str(Path(output_dir) / f"chunk_{idx:02d}_{chunk_start}_to_{chunk_end}")
+        print(
+            f"Fetching SPX chunk {idx}/{len(chunks)}: start_date={chunk_start} end_date={chunk_end}"
+        )
+        chunk_records = _fetch_spx_export_records_single_range(
+            chunk_start,
+            chunk_end,
+            headless=headless,
+            keep_download=keep_download,
+            output_dir=chunk_output_dir,
+        )
+        all_records.extend(chunk_records)
+
+    deduped_records: List[Dict[str, Any]] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for record in all_records:
+        key = (
+            str(record.get("source_system") or ""),
+            str(record.get("order_id") or ""),
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped_records.append(record)
+    return deduped_records
