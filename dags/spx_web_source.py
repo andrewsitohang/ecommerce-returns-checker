@@ -1210,7 +1210,14 @@ def _fetch_spx_export_records_single_range(
             username_locator.fill(username)
             password_locator.fill(password)
             submit_locator.click()
-            page.wait_for_load_state(login_wait_for)
+            try:
+                page.wait_for_load_state(login_wait_for, timeout=min(timeout_ms, 15000))
+            except Exception as exc:
+                if login_wait_for != "networkidle":
+                    raise
+                network_debug_events.append(
+                    f"post_login_wait_timeout\t{login_wait_for}\t{type(exc).__name__}"
+                )
 
             try:
                 page.wait_for_url(lambda url: not _is_login_url(url), timeout=timeout_ms)
