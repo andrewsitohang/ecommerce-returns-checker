@@ -1015,6 +1015,9 @@ def fetch_spx_export_records(
         ["button:has-text('Cari')"],
     )
     timeout_ms = int(os.getenv("SPX_WEB_TIMEOUT_MS", "120000"))
+    download_timeout_ms = int(os.getenv("SPX_WEB_DOWNLOAD_TIMEOUT_MS", str(min(timeout_ms, 180000))))
+    export_ready_timeout_s = int(os.getenv("SPX_EXPORT_READY_TIMEOUT_SECONDS", "900"))
+    export_retry_interval_s = float(os.getenv("SPX_EXPORT_RETRY_INTERVAL_SECONDS", "5"))
 
     target_dir_ctx = tempfile.TemporaryDirectory() if output_dir is None else None
     download_dir = Path(output_dir or target_dir_ctx.name)
@@ -1340,7 +1343,7 @@ def fetch_spx_export_records(
             try:
                 captured_export_path = None
                 capture_enabled = True
-                with page.expect_download(timeout=min(timeout_ms, 60000)) as download_info:
+                with page.expect_download(timeout=download_timeout_ms) as download_info:
                     _click_result_download()
                 download = download_info.value
                 export_path = download_dir / download.suggested_filename
@@ -1348,7 +1351,6 @@ def fetch_spx_export_records(
             except PlaywrightTimeoutError:
                 captured_export_path = None
                 capture_enabled = True
-                export_ready_timeout_s = int(os.getenv("SPX_EXPORT_READY_TIMEOUT_SECONDS", "600"))
                 deadline = time.time() + export_ready_timeout_s
                 next_retry_at = 0.0
                 while time.time() < deadline and export_path is None:
@@ -1368,19 +1370,19 @@ def fetch_spx_export_records(
                                     download_dir,
                                     network_debug_events,
                                 )
-                                next_retry_at = time.time() + 5
+                                next_retry_at = time.time() + export_retry_interval_s
                                 continue
                             if latest_export_task_id:
                                 network_debug_events.append(
                                     f"retry_wait_task_pending\t{latest_export_task_id}"
                                 )
                                 _poll_export_task_list()
-                                next_retry_at = time.time() + 5
+                                next_retry_at = time.time() + export_retry_interval_s
                                 continue
                             _click_result_download()
                         except Exception:
                             pass
-                        next_retry_at = time.time() + 5
+                        next_retry_at = time.time() + export_retry_interval_s
                     time.sleep(1)
                 if export_path is None:
                     raise
@@ -1391,7 +1393,9 @@ def fetch_spx_export_records(
             _write_control_debug(page, download_dir, "spx_download_controls")
             _flush_network_debug()
             raise TimeoutError(
-                f"Timed out waiting for SPX export download. Checked download selectors={download_selectors}, "
+                f"Timed out waiting for SPX export download. download_timeout_ms={download_timeout_ms}, "
+                f"export_ready_timeout_s={export_ready_timeout_s}, export_retry_interval_s={export_retry_interval_s}. "
+                f"Checked download selectors={download_selectors}, "
                 f"dialog selectors={download_dialog_selectors}, result selectors={download_result_selectors}. "
                 f"Debug files saved under {download_dir}."
             ) from exc
