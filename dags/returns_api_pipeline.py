@@ -64,17 +64,28 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _current_quarter_range(today: Optional[date] = None) -> tuple[str, str]:
+def _default_fetch_range(today: Optional[date] = None) -> tuple[str, str]:
     current = today or date.today()
-    quarter = (current.month - 1) // 3 + 1
-    start_month = (quarter - 1) * 3 + 1
-    start_date = date(current.year, start_month, 1)
-    if quarter == 4:
-        end_date = date(current.year, 12, 31)
-    else:
-        next_quarter_start = date(current.year, start_month + 3, 1)
-        end_date = next_quarter_start - pd.Timedelta(days=1)
+    start_date = date(current.year, 1, 1)
+    end_date = current
     return start_date.isoformat(), end_date.isoformat()
+
+
+def _get_fetch_range(today: Optional[date] = None) -> tuple[str, str]:
+    default_start, default_end = _default_fetch_range(today=today)
+    start_date = os.getenv("RETURNS_FETCH_START_DATE", "").strip() or default_start
+    end_date = os.getenv("RETURNS_FETCH_END_DATE", "").strip() or default_end
+    start_dt = pd.to_datetime(start_date, errors="coerce")
+    end_dt = pd.to_datetime(end_date, errors="coerce")
+    if pd.isna(start_dt):
+        raise ValueError(f"Invalid RETURNS_FETCH_START_DATE: {start_date}")
+    if pd.isna(end_dt):
+        raise ValueError(f"Invalid RETURNS_FETCH_END_DATE: {end_date}")
+    if start_dt > end_dt:
+        raise ValueError(
+            f"RETURNS_FETCH_START_DATE must be <= RETURNS_FETCH_END_DATE, got {start_date} > {end_date}"
+        )
+    return start_date, end_date
 
 
 def _get_nested(obj: Dict[str, Any], path: Iterable[str], default: Any = None) -> Any:
@@ -446,7 +457,7 @@ def _read_raw_payload(table_name: str) -> List[Dict[str, Any]]:
 
 
 def extract_spx_web_raw() -> None:
-    q_start, q_end = _current_quarter_range()
+    q_start, q_end = _get_fetch_range()
     enabled_sources = _get_enabled_return_sources()
     if "spx_web" not in enabled_sources:
         _write_raw_payload(RAW_SPX_WEB_TABLE, [])
@@ -462,7 +473,7 @@ def extract_spx_web_raw() -> None:
 
 
 def extract_everpro_api_raw() -> None:
-    q_start, q_end = _current_quarter_range()
+    q_start, q_end = _get_fetch_range()
     enabled_sources = _get_enabled_return_sources()
     if "everpro_api" not in enabled_sources:
         _write_raw_payload(RAW_EVERPRO_API_TABLE, [])
