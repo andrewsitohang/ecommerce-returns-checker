@@ -22,6 +22,13 @@ DAG:
 - file: `dags/returns_api_pipeline.py`
 - dag id: `returns_api_weekly`
 
+Perilaku load:
+- SPX otomatis memecah range panjang menjadi beberapa chunk supaya export UI lebih stabil.
+- Raw payload disimpan append per run, bukan mengganti histori raw.
+- Staging memakai upsert berdasarkan `source_system` dan `order_id`.
+- Mart dihitung di PostgreSQL hanya untuk minggu yang terdampak oleh data run terbaru.
+- Index dibuat otomatis untuk kolom lookup utama di staging dan mart.
+
 ## Database Output
 
 Schema `raw`
@@ -42,7 +49,11 @@ Schema `mart`
 ```env
 SPX_WEB_SOURCE_ENABLED=true
 EVERPRO_API_SOURCE_ENABLED=true
+RETURNS_FETCH_START_DATE=
+RETURNS_FETCH_END_DATE=
 ```
+
+Jika `RETURNS_FETCH_START_DATE` dan `RETURNS_FETCH_END_DATE` kosong, pipeline mengambil data dari 1 Januari tahun berjalan sampai tanggal run. Isi salah satu atau keduanya jika butuh range backfill eksplisit.
 
 ### SPX web scraping source
 ```env
@@ -52,7 +63,15 @@ SPX_WEB_USERNAME=YOUR_SPX_USERNAME
 SPX_WEB_PASSWORD=YOUR_SPX_PASSWORD
 SPX_WEB_HEADLESS=true
 SPX_WEB_DOWNLOAD_DIR=/opt/airflow/data/spx_downloads
+SPX_WEB_POST_LOGIN_WAIT_FOR=load
+SPX_WEB_DATE_CHUNK_DAYS=31
+SPX_WEB_TIMEOUT_MS=120000
+SPX_WEB_DOWNLOAD_TIMEOUT_MS=180000
+SPX_EXPORT_READY_TIMEOUT_SECONDS=900
+SPX_EXPORT_RETRY_INTERVAL_SECONDS=5
 ```
+
+Untuk GCP yang kurang stabil, turunkan `SPX_WEB_DATE_CHUNK_DAYS` ke `14` atau `7`.
 
 ### Everpro API source
 ```env
@@ -60,6 +79,15 @@ EVERPRO_API_BASE_URL=https://customer.everpro.id
 EVERPRO_API_TOKEN=YOUR_EVERPRO_ACCESS_TOKEN
 EVERPRO_REFRESH_TOKEN=YOUR_EVERPRO_REFRESH_TOKEN
 EVERPRO_API_LIMIT=100
+```
+
+### API retry
+```env
+API_MAX_PAGES=50
+API_RATE_SLEEP=1.5
+API_MAX_RETRIES=5
+API_NETWORK_MAX_RETRIES=8
+API_FATAL_ON_5XX=false
 ```
 
 ### Database

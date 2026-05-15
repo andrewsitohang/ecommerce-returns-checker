@@ -239,6 +239,55 @@ def _df_to_postgres(
     cur.close()
 
 
+def _append_df_to_postgres(
+    df: pd.DataFrame,
+    table_name: str,
+    conn: psycopg2.extensions.connection,
+    schema: str,
+) -> None:
+    cur = conn.cursor()
+    cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+
+    column_defs = []
+    for col in df.columns:
+        dtype = df[col].dtype
+        if pd.api.types.is_integer_dtype(dtype):
+            col_type = "BIGINT"
+        elif pd.api.types.is_float_dtype(dtype):
+            col_type = "DOUBLE PRECISION"
+        else:
+            col_type = "TEXT"
+        column_defs.append((col, col_type))
+
+    create_columns_sql = ", ".join(f'"{col}" {col_type}' for col, col_type in column_defs)
+    cur.execute(
+        f'CREATE TABLE IF NOT EXISTS "{schema}"."{table_name}" ({create_columns_sql})'
+    )
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = %s AND table_name = %s
+        """,
+        (schema, table_name),
+    )
+    existing_cols = {row[0] for row in cur.fetchall()}
+    for col, col_type in column_defs:
+        if col not in existing_cols:
+            cur.execute(f'ALTER TABLE "{schema}"."{table_name}" ADD COLUMN "{col}" {col_type}')
+
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False)
+    buffer.seek(0)
+    columns_sql = ", ".join(f'"{col}"' for col in df.columns)
+    cur.copy_expert(
+        f'COPY "{schema}"."{table_name}" ({columns_sql}) FROM STDIN WITH CSV HEADER',
+        buffer,
+    )
+    conn.commit()
+    cur.close()
+
+
 def _fetch_paged(url: str, params: Dict[str, Any], headers: Dict[str, str]) -> List[Dict[str, Any]]:
     page = int(params.get("page", 1))
     limit = int(params.get("limit", 100))
@@ -408,7 +457,13 @@ def _table_exists(conn: psycopg2.extensions.connection, schema: str, table_name:
     return exists
 
 
-def _write_raw_payload(table_name: str, payload_obj: Any) -> None:
+def _write_raw_payload(
+    table_name: str,
+    payload_obj: Any,
+    *,
+    fetch_start_date: Optional[str] = None,
+    fetch_end_date: Optional[str] = None,
+) -> None:
     db_host = _env("DB_HOST")
     db_port = _env("DB_PORT")
     db_name = _env("DB_NAME")
@@ -423,9 +478,16 @@ def _write_raw_payload(table_name: str, payload_obj: Any) -> None:
     )
     _ensure_schema(conn, RAW_SCHEMA)
     payload_df = pd.DataFrame(
-        [{"run_ts": datetime.utcnow().isoformat(), "payload": json.dumps(payload_obj, ensure_ascii=False)}]
+        [
+            {
+                "run_ts": datetime.utcnow().isoformat(),
+                "fetch_start_date": fetch_start_date or "",
+                "fetch_end_date": fetch_end_date or "",
+                "payload": json.dumps(payload_obj, ensure_ascii=False),
+            }
+        ]
     )
-    _df_to_postgres(payload_df, table_name, conn, RAW_SCHEMA, replace=True)
+    _append_df_to_postgres(payload_df, table_name, conn, RAW_SCHEMA)
     conn.close()
 
 
@@ -460,7 +522,7 @@ def extract_spx_web_raw() -> None:
     q_start, q_end = _get_fetch_range()
     enabled_sources = _get_enabled_return_sources()
     if "spx_web" not in enabled_sources:
-        _write_raw_payload(RAW_SPX_WEB_TABLE, [])
+        _write_raw_payload(RAW_SPX_WEB_TABLE, [], fetch_start_date=q_start, fetch_end_date=q_end)
         return
     records = fetch_spx_export_records(
         q_start,
@@ -469,17 +531,17 @@ def extract_spx_web_raw() -> None:
         keep_download=False,
         output_dir=os.getenv("SPX_WEB_DOWNLOAD_DIR"),
     )
-    _write_raw_payload(RAW_SPX_WEB_TABLE, records)
+    _write_raw_payload(RAW_SPX_WEB_TABLE, records, fetch_start_date=q_start, fetch_end_date=q_end)
 
 
 def extract_everpro_api_raw() -> None:
     q_start, q_end = _get_fetch_range()
     enabled_sources = _get_enabled_return_sources()
     if "everpro_api" not in enabled_sources:
-        _write_raw_payload(RAW_EVERPRO_API_TABLE, [])
+        _write_raw_payload(RAW_EVERPRO_API_TABLE, [], fetch_start_date=q_start, fetch_end_date=q_end)
         return
     payloads = _fetch_everpro_orders(q_start, q_end)
-    _write_raw_payload(RAW_EVERPRO_API_TABLE, payloads)
+    _write_raw_payload(RAW_EVERPRO_API_TABLE, payloads, fetch_start_date=q_start, fetch_end_date=q_end)
 
 
 def _build_everpro_status_map(payloads: List[Dict[str, Any]]) -> Dict[str, str]:
@@ -592,6 +654,228 @@ def _normalize_api2_source_data(source_mode: str, data: List[Dict[str, Any]]) ->
     raise ValueError(f"Unsupported normalization source mode: {source_mode}")
 
 
+def _create_reporting_indexes(conn: psycopg2.extensions.connection) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        f'CREATE INDEX IF NOT EXISTS idx_{STG_RETURN_SHIPMENTS_TABLE}_source_order '
+        f'ON "{STAGING_SCHEMA}"."{STG_RETURN_SHIPMENTS_TABLE}" ("source_system", "order_id")'
+    )
+    cur.execute(
+        f'CREATE INDEX IF NOT EXISTS idx_{STG_RETURN_SHIPMENTS_TABLE}_event_date '
+        f'ON "{STAGING_SCHEMA}"."{STG_RETURN_SHIPMENTS_TABLE}" ("event_date")'
+    )
+    cur.execute(
+        f'CREATE INDEX IF NOT EXISTS idx_{STG_RETURN_SHIPMENTS_TABLE}_dims '
+        f'ON "{STAGING_SCHEMA}"."{STG_RETURN_SHIPMENTS_TABLE}" '
+        f'("province", "city", "expedition", "service_type")'
+    )
+    cur.execute(
+        f'CREATE INDEX IF NOT EXISTS idx_{RETURNS_WEEKLY_TABLE}_week_dims '
+        f'ON "{MART_SCHEMA}"."{RETURNS_WEEKLY_TABLE}" ("year", "week_of_year", "province", "city", "expedition")'
+    )
+    cur.execute(
+        f'CREATE INDEX IF NOT EXISTS idx_{RETURNS_REASON_TABLE}_week_dims '
+        f'ON "{MART_SCHEMA}"."{RETURNS_REASON_TABLE}" ("year", "week_of_year", "province", "city", "expedition")'
+    )
+    cur.execute(
+        f'CREATE INDEX IF NOT EXISTS idx_{RETURNS_DRIVER_TABLE}_week_dims '
+        f'ON "{MART_SCHEMA}"."{RETURNS_DRIVER_TABLE}" ("year", "week_of_year", "province", "city", "expedition")'
+    )
+    conn.commit()
+    cur.close()
+
+
+def _create_empty_mart_tables(conn: psycopg2.extensions.connection) -> None:
+    cur = conn.cursor()
+    cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{MART_SCHEMA}"')
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS "{MART_SCHEMA}"."{RETURNS_WEEKLY_TABLE}" (
+            "year" BIGINT,
+            "week_of_year" BIGINT,
+            "province" TEXT,
+            "city" TEXT,
+            "expedition" TEXT,
+            "service_type" TEXT,
+            "payment_method" TEXT,
+            "cod_type" TEXT,
+            "total_shipments" BIGINT,
+            "total_returns" BIGINT,
+            "total_order_value" DOUBLE PRECISION,
+            "total_cod_value" DOUBLE PRECISION,
+            "total_shipping_fee" DOUBLE PRECISION,
+            "return_rate" DOUBLE PRECISION
+        )
+        """
+    )
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS "{MART_SCHEMA}"."{RETURNS_REASON_TABLE}" (
+            "year" BIGINT,
+            "week_of_year" BIGINT,
+            "province" TEXT,
+            "city" TEXT,
+            "expedition" TEXT,
+            "service_type" TEXT,
+            "return_reason" TEXT,
+            "total_shipments" BIGINT,
+            "total_returns" BIGINT,
+            "return_rate" DOUBLE PRECISION
+        )
+        """
+    )
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS "{MART_SCHEMA}"."{RETURNS_DRIVER_TABLE}" (
+            "year" BIGINT,
+            "week_of_year" BIGINT,
+            "province" TEXT,
+            "city" TEXT,
+            "expedition" TEXT,
+            "driver_type" TEXT,
+            "driver_value" TEXT,
+            "total_shipments" BIGINT,
+            "total_returns" BIGINT,
+            "total_order_value" DOUBLE PRECISION,
+            "shipments_share" DOUBLE PRECISION,
+            "return_rate" DOUBLE PRECISION,
+            "rank_in_group" BIGINT
+        )
+        """
+    )
+    conn.commit()
+    cur.close()
+
+
+def _refresh_returns_marts_sql(
+    conn: psycopg2.extensions.connection,
+    affected_weeks: List[tuple[int, int]],
+) -> None:
+    if not affected_weeks:
+        return
+
+    _create_empty_mart_tables(conn)
+    cur = conn.cursor()
+    cur.execute('CREATE TEMP TABLE affected_return_weeks ("year" BIGINT, "week_of_year" BIGINT) ON COMMIT DROP')
+    cur.executemany(
+        'INSERT INTO affected_return_weeks ("year", "week_of_year") VALUES (%s, %s)',
+        affected_weeks,
+    )
+
+    for table_name in [RETURNS_WEEKLY_TABLE, RETURNS_REASON_TABLE, RETURNS_DRIVER_TABLE]:
+        cur.execute(
+            f"""
+            DELETE FROM "{MART_SCHEMA}"."{table_name}" m
+            USING affected_return_weeks a
+            WHERE m."year" = a."year"
+              AND m."week_of_year" = a."week_of_year"
+            """
+        )
+
+    base_sql = f"""
+        FROM "{STAGING_SCHEMA}"."{STG_RETURN_SHIPMENTS_TABLE}" s
+        JOIN affected_return_weeks a
+          ON EXTRACT(YEAR FROM NULLIF(s."event_date"::text, '')::date)::bigint = a."year"
+         AND EXTRACT(WEEK FROM NULLIF(s."event_date"::text, '')::date)::bigint = a."week_of_year"
+        WHERE COALESCE(NULLIF(s."eligible_shipment_flag"::text, ''), '0')::bigint = 1
+          AND s."event_date" IS NOT NULL
+          AND NULLIF(s."event_date"::text, '') IS NOT NULL
+    """
+
+    cur.execute(
+        f"""
+        INSERT INTO "{MART_SCHEMA}"."{RETURNS_WEEKLY_TABLE}"
+        SELECT
+            EXTRACT(YEAR FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "year",
+            EXTRACT(WEEK FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "week_of_year",
+            COALESCE(NULLIF(s."province"::text, ''), 'No Value') AS "province",
+            COALESCE(NULLIF(s."city"::text, ''), 'No Value') AS "city",
+            COALESCE(NULLIF(s."expedition"::text, ''), 'No Value') AS "expedition",
+            COALESCE(NULLIF(s."service_type"::text, ''), 'No Value') AS "service_type",
+            COALESCE(NULLIF(s."payment_method"::text, ''), 'No Value') AS "payment_method",
+            COALESCE(NULLIF(s."cod_type"::text, ''), 'NON-COD') AS "cod_type",
+            COUNT(*)::bigint AS "total_shipments",
+            SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::bigint AS "total_returns",
+            SUM(COALESCE(NULLIF(s."order_value"::text, ''), '0')::double precision) AS "total_order_value",
+            SUM(COALESCE(NULLIF(s."cod_value"::text, ''), '0')::double precision) AS "total_cod_value",
+            SUM(COALESCE(NULLIF(s."shipping_fee"::text, ''), '0')::double precision) AS "total_shipping_fee",
+            SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::double precision / NULLIF(COUNT(*), 0) AS "return_rate"
+        {base_sql}
+        GROUP BY 1,2,3,4,5,6,7,8
+        """
+    )
+
+    cur.execute(
+        f"""
+        INSERT INTO "{MART_SCHEMA}"."{RETURNS_REASON_TABLE}"
+        SELECT
+            EXTRACT(YEAR FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "year",
+            EXTRACT(WEEK FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "week_of_year",
+            COALESCE(NULLIF(s."province"::text, ''), 'No Value') AS "province",
+            COALESCE(NULLIF(s."city"::text, ''), 'No Value') AS "city",
+            COALESCE(NULLIF(s."expedition"::text, ''), 'No Value') AS "expedition",
+            COALESCE(NULLIF(s."service_type"::text, ''), 'No Value') AS "service_type",
+            COALESCE(NULLIF(s."return_reason"::text, ''), 'No Reason Provided') AS "return_reason",
+            COUNT(*)::bigint AS "total_shipments",
+            SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::bigint AS "total_returns",
+            SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::double precision / NULLIF(COUNT(*), 0) AS "return_rate"
+        {base_sql}
+        GROUP BY 1,2,3,4,5,6,7
+        """
+    )
+
+    cur.execute(
+        f"""
+        INSERT INTO "{MART_SCHEMA}"."{RETURNS_DRIVER_TABLE}"
+        WITH grouped AS (
+            SELECT
+                EXTRACT(YEAR FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "year",
+                EXTRACT(WEEK FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "week_of_year",
+                COALESCE(NULLIF(s."province"::text, ''), 'No Value') AS "province",
+                COALESCE(NULLIF(s."city"::text, ''), 'No Value') AS "city",
+                COALESCE(NULLIF(s."expedition"::text, ''), 'No Value') AS "expedition",
+                'service_type'::text AS "driver_type",
+                COALESCE(NULLIF(s."service_type"::text, ''), 'No Value') AS "driver_value",
+                COUNT(*)::bigint AS "total_shipments",
+                SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::bigint AS "total_returns",
+                SUM(COALESCE(NULLIF(s."order_value"::text, ''), '0')::double precision) AS "total_order_value"
+            {base_sql}
+            GROUP BY 1,2,3,4,5,6,7
+        ),
+        scored AS (
+            SELECT
+                grouped.*,
+                SUM("total_shipments") OVER (
+                    PARTITION BY "year", "week_of_year", "province", "city", "expedition", "driver_type"
+                ) AS "group_total_shipments"
+            FROM grouped
+        )
+        SELECT
+            "year",
+            "week_of_year",
+            "province",
+            "city",
+            "expedition",
+            "driver_type",
+            "driver_value",
+            "total_shipments",
+            "total_returns",
+            "total_order_value",
+            "total_shipments"::double precision / NULLIF("group_total_shipments", 0) AS "shipments_share",
+            "total_returns"::double precision / NULLIF("total_shipments", 0) AS "return_rate",
+            DENSE_RANK() OVER (
+                PARTITION BY "year", "week_of_year", "province", "city", "expedition", "driver_type"
+                ORDER BY "total_returns"::double precision / NULLIF("total_shipments", 0) DESC
+            )::bigint AS "rank_in_group"
+        FROM scored
+        """
+    )
+
+    conn.commit()
+    cur.close()
+    _create_reporting_indexes(conn)
+
+
 def build_returns_reporting_tables() -> None:
     db_host = _env("DB_HOST")
     db_port = _env("DB_PORT")
@@ -653,171 +937,28 @@ def build_returns_reporting_tables() -> None:
         axis=1,
     )
 
-    # staging table
-    _df_to_postgres(returns_raw, STG_RETURN_SHIPMENTS_TABLE, conn, STAGING_SCHEMA, replace=True)
-
-    # Return rate denominator includes only final non-cancel shipments.
-    returns_raw = returns_raw[returns_raw["eligible_shipment_flag"] == 1].copy()
-
-    returns_raw["event_date"] = pd.to_datetime(returns_raw["event_date"], errors="coerce")
-    returns_raw["year"] = returns_raw["event_date"].dt.year
-    returns_raw["week_of_year"] = returns_raw["event_date"].dt.isocalendar().week.astype("Int64")
-
-    returns_weekly = (
-        returns_raw.groupby(
-            [
-                "year",
-                "week_of_year",
-                "province",
-                "city",
-                "expedition",
-                "service_type",
-                "payment_method",
-                "cod_type",
-            ],
-            dropna=False,
-        )
-        .agg(
-            total_shipments=("order_id", "count"),
-            total_returns=("return_flag", "sum"),
-            total_order_value=("order_value", "sum"),
-            total_cod_value=("cod_value", "sum"),
-            total_shipping_fee=("shipping_fee", "sum"),
-        )
-        .reset_index()
-        .sort_values(["year", "week_of_year", "province", "city", "expedition"])
-    )
-    returns_weekly["return_rate"] = returns_weekly.apply(
-        lambda row: (row["total_returns"] / row["total_shipments"]) if row["total_shipments"] else 0.0,
-        axis=1,
-    )
-
-    returns_reason_weekly = (
-        returns_raw.groupby(
-            ["year", "week_of_year", "province", "city", "expedition", "service_type", "return_reason"],
-            dropna=False,
-        )
-        .agg(
-            total_shipments=("order_id", "count"),
-            total_returns=("return_flag", "sum"),
-        )
-        .reset_index()
-        .sort_values(["year", "week_of_year", "province", "city", "expedition", "return_reason"])
-    )
-    returns_reason_weekly["return_rate"] = returns_reason_weekly.apply(
-        lambda row: (row["total_returns"] / row["total_shipments"]) if row["total_shipments"] else 0.0,
-        axis=1,
-    )
-
-    driver_frames = []
-    for driver_name in ["service_type"]:
-        grouped = (
-            returns_raw.groupby(
-                ["year", "week_of_year", "province", "city", "expedition", driver_name],
-                dropna=False,
-            )
-            .agg(
-                total_shipments=("order_id", "count"),
-                total_returns=("return_flag", "sum"),
-                total_order_value=("order_value", "sum"),
-            )
-            .reset_index()
-        )
-        grouped["group_total_shipments"] = grouped.groupby(
-            ["year", "week_of_year", "province", "city", "expedition"], dropna=False
-        )["total_shipments"].transform("sum")
-        grouped["shipments_share"] = grouped.apply(
-            lambda row: (row["total_shipments"] / row["group_total_shipments"]) if row["group_total_shipments"] else 0.0,
-            axis=1,
-        )
-        grouped["driver_type"] = driver_name
-        grouped["driver_value"] = grouped[driver_name].astype(str)
-        grouped["return_rate"] = grouped.apply(
-            lambda row: (row["total_returns"] / row["total_shipments"]) if row["total_shipments"] else 0.0,
-            axis=1,
-        )
-        driver_frames.append(
-            grouped[
-                [
-                    "year",
-                    "week_of_year",
-                    "province",
-                    "city",
-                    "expedition",
-                    "driver_type",
-                    "driver_value",
-                    "total_shipments",
-                    "total_returns",
-                    "total_order_value",
-                    "shipments_share",
-                    "return_rate",
-                ]
-            ]
-        )
-
-    returns_driver_weekly = pd.concat(driver_frames, ignore_index=True).sort_values(
-        ["year", "week_of_year", "province", "city", "expedition", "driver_type", "return_rate"],
-        ascending=[True, True, True, True, True, True, False],
-    )
-    returns_driver_weekly["rank_in_group"] = (
-        returns_driver_weekly.groupby(
-            ["year", "week_of_year", "province", "city", "expedition", "driver_type"],
-            dropna=False,
-        )["return_rate"]
-        .rank(method="dense", ascending=False)
-        .astype(int)
-    )
-
-    # Store to DB only (replace tables each run)
+    returns_raw = returns_raw.drop_duplicates(subset=["source_system", "order_id"], keep="last")
     _df_to_postgres(
-        returns_weekly,
-        RETURNS_WEEKLY_TABLE,
+        returns_raw,
+        STG_RETURN_SHIPMENTS_TABLE,
         conn,
-        MART_SCHEMA,
+        STAGING_SCHEMA,
         replace=False,
-        unique_keys=[
-            "year",
-            "week_of_year",
-            "province",
-            "city",
-            "expedition",
-            "service_type",
-            "payment_method",
-            "cod_type",
-        ],
+        unique_keys=["source_system", "order_id"],
     )
-    _df_to_postgres(
-        returns_reason_weekly,
-        RETURNS_REASON_TABLE,
-        conn,
-        MART_SCHEMA,
-        replace=False,
-        unique_keys=[
-            "year",
-            "week_of_year",
-            "province",
-            "city",
-            "expedition",
-            "service_type",
-            "return_reason",
-        ],
-    )
-    _df_to_postgres(
-        returns_driver_weekly,
-        RETURNS_DRIVER_TABLE,
-        conn,
-        MART_SCHEMA,
-        replace=False,
-        unique_keys=[
-            "year",
-            "week_of_year",
-            "province",
-            "city",
-            "expedition",
-            "driver_type",
-            "driver_value",
-        ],
-    )
+
+    event_dates = pd.to_datetime(returns_raw["event_date"], errors="coerce")
+    affected_weeks_df = pd.DataFrame(
+        {
+            "year": event_dates.dt.year,
+            "week_of_year": event_dates.dt.isocalendar().week.astype("Int64"),
+        }
+    ).dropna()
+    affected_weeks = [
+        (int(row["year"]), int(row["week_of_year"]))
+        for _, row in affected_weeks_df.drop_duplicates().iterrows()
+    ]
+    _refresh_returns_marts_sql(conn, affected_weeks)
     conn.close()
 
 
