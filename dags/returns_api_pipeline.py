@@ -343,6 +343,11 @@ def _fetch_paged(url: str, params: Dict[str, Any], headers: Dict[str, str]) -> L
                     resp.raise_for_status()
                 # stop paging but keep what we already collected
                 break
+        if resp.status_code == 401:
+            raise RuntimeError(
+                f"API returned 401 Unauthorized on page={params.get('page')}. "
+                "Refresh the source access token in EVERPRO_API_TOKEN, then recreate/restart Airflow services."
+            )
         resp.raise_for_status()
         payload = resp.json()
         results.append(payload)
