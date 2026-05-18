@@ -386,6 +386,35 @@ def _wait_for_page_ready(page: Any, timeout_ms: int, *, allow_networkidle_timeou
             raise
 
 
+def _goto_with_retries(page: Any, url: str, timeout_ms: int, *, label: str) -> None:
+    max_attempts = max(1, int(os.getenv("SPX_WEB_GOTO_RETRIES", "3")))
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            try:
+                page.wait_for_load_state("load", timeout=min(timeout_ms, 30000))
+            except Exception:
+                pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 10000))
+            except Exception:
+                pass
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            try:
+                page.goto("about:blank", wait_until="commit", timeout=10000)
+            except Exception:
+                pass
+            time.sleep(min(5 * attempt, 20))
+    raise TimeoutError(
+        f"Unable to navigate SPX page after {max_attempts} attempts during {label}: {url}"
+    ) from last_error
+
+
 def _page_contains_any_text(page: Any, texts: List[str]) -> bool:
     for text in texts:
         try:
@@ -1229,8 +1258,7 @@ def _fetch_spx_export_records_single_range(
                 ) from exc
 
             _write_session_debug(page, download_dir, "spx_post_login_session")
-            page.goto(tracking_url, wait_until="domcontentloaded")
-            _wait_for_page_ready(page, timeout_ms)
+            _goto_with_retries(page, tracking_url, timeout_ms, label="post-login tracking navigation")
             _write_session_debug(page, download_dir, "spx_post_tracking_nav_session")
 
         def _ensure_tracking_page_state(*, context: str) -> None:
@@ -1248,8 +1276,7 @@ def _fetch_spx_export_records_single_range(
                     f"Debug files saved under {download_dir}."
                 )
 
-        page.goto(tracking_url, wait_until="domcontentloaded")
-        _wait_for_page_ready(page, timeout_ms)
+        _goto_with_retries(page, tracking_url, timeout_ms, label="initial tracking navigation")
         try:
             page.evaluate("(dir) => { window.__spxDownloadDebugDir = dir; }", str(download_dir))
         except Exception:
