@@ -238,7 +238,7 @@ def _write_session_debug(page: Any, output_dir: Path, prefix: str) -> None:
         lines.append("url\tUnavailable")
     try:
         lines.append(f"title\t{page.title()}")
-    except Exception:
+    except BaseException:
         lines.append("title\tUnavailable")
     try:
         cookies = page.context.cookies()
@@ -253,7 +253,7 @@ def _write_session_debug(page: Any, output_dir: Path, prefix: str) -> None:
             lines.append(
                 f"cookie\t{name}\tdomain={domain}\tpath={path}\tsecure={secure}\thttpOnly={http_only}\tvalue_preview={value_preview}"
             )
-    except Exception as exc:
+    except BaseException as exc:
         lines.append(f"cookie_error\t{exc}")
     try:
         storage_state = page.context.storage_state()
@@ -267,7 +267,7 @@ def _write_session_debug(page: Any, output_dir: Path, prefix: str) -> None:
                 key = item.get("name", "")
                 value_preview = str(item.get("value", ""))[:80]
                 lines.append(f"local_storage\t{origin_name}\t{key}\t{value_preview}")
-    except Exception as exc:
+    except BaseException as exc:
         lines.append(f"storage_error\t{exc}")
     (output_dir / f"{prefix}.txt").write_text("\n".join(lines), encoding="utf-8")
 

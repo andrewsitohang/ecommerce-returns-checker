@@ -12,8 +12,13 @@ x-airflow-common: &airflow-common
     - ./plugins:/opt/airflow/plugins
     - ./data:/opt/airflow/data
   user: "${AIRFLOW_UID:-50000}:0"
+  extra_hosts:
+    - "postgres:172.28.0.10"
+  networks:
+    returns-net:
   depends_on:
-    - postgres
+    postgres:
+      condition: service_healthy
 
 services:
   postgres:
@@ -30,6 +35,9 @@ services:
       retries: 5
       start_period: 5s
     restart: always
+    networks:
+      returns-net:
+        ipv4_address: 172.28.0.10
 
   airflow-init:
     <<: *airflow-common
@@ -51,18 +59,12 @@ services:
       timeout: 10s
       retries: 5
     restart: always
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
 
   airflow-scheduler:
     <<: *airflow-common
     env_file: .env
     command: scheduler
     restart: always
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
 
   caddy:
     image: caddy:2.8
@@ -80,6 +82,8 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     restart: always
+    networks:
+      returns-net:
 
   metabase:
     image: metabase/metabase:v0.56.5
@@ -93,10 +97,22 @@ services:
       MB_SITE_URL: ${METABASE_PUBLIC_BASE_URL}
       MB_ENCRYPTION_SECRET_KEY: ${METABASE_ENCRYPTION_SECRET_KEY}
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "postgres:172.28.0.10"
     restart: always
+    networks:
+      returns-net:
 
 volumes:
   postgres-db-volume:
   caddy-data:
   caddy-config:
+
+networks:
+  returns-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
