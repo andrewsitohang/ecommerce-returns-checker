@@ -981,6 +981,8 @@ with DAG(
     schedule="0 1 * * 1",
     start_date=datetime(2025, 1, 1),
     catchup=False,
+    max_active_runs=1,
+    max_active_tasks=1,
     tags=["etl", "returns", "spx", "everpro", "analytics"],
 ) as dag:
     extract_spx_web = PythonOperator(

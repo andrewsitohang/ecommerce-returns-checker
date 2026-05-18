@@ -6,6 +6,9 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER:-airflow}:${DB_PASSWORD:-airflow}@postgres/${DB_NAME:-airflow}
+    AIRFLOW__SCHEDULER__TASK_INSTANCE_HEARTBEAT_TIMEOUT: "1800"
+    AIRFLOW__SCHEDULER__TASK_INSTANCE_HEARTBEAT_TIMEOUT_DETECTION_INTERVAL: "120"
+    AIRFLOW__SCHEDULER__ZOMBIE_DETECTION_INTERVAL: "120"
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs

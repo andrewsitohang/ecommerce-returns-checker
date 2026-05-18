@@ -1457,7 +1457,7 @@ def fetch_spx_export_records(
     keep_download: bool = False,
     output_dir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    chunk_days = int(os.getenv("SPX_WEB_DATE_CHUNK_DAYS", "31"))
+    chunk_days = int(os.getenv("SPX_WEB_DATE_CHUNK_DAYS", "14"))
     if chunk_days <= 0:
         raise ValueError(f"SPX_WEB_DATE_CHUNK_DAYS must be > 0, got {chunk_days}")
 
@@ -1473,6 +1473,7 @@ def fetch_spx_export_records(
 
     all_records: List[Dict[str, Any]] = []
     for idx, (chunk_start, chunk_end) in enumerate(chunks, start=1):
+        chunk_started_at = time.time()
         chunk_output_dir = output_dir
         if output_dir:
             chunk_output_dir = str(Path(output_dir) / f"chunk_{idx:02d}_{chunk_start}_to_{chunk_end}")
@@ -1485,6 +1486,10 @@ def fetch_spx_export_records(
             headless=headless,
             keep_download=keep_download,
             output_dir=chunk_output_dir,
+        )
+        print(
+            f"Finished SPX chunk {idx}/{len(chunks)}: rows={len(chunk_records)} "
+            f"elapsed_seconds={time.time() - chunk_started_at:.1f}"
         )
         all_records.extend(chunk_records)
 
