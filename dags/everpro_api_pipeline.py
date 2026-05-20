@@ -137,7 +137,7 @@ def _has_cancel_keyword(*values: Any) -> bool:
 def _is_final_non_cancel_status(status: Any) -> bool:
     status_text = _normalize_text(status, fallback="").lower()
     final_statuses = FINAL_SUCCESS_STATUSES | FINAL_RETURN_STATUSES | FINAL_FAILED_STATUSES
-    return status_text in final_statuses
+    return any(final_status in status_text for final_status in final_statuses)
 
 
 def _is_eligible_shipment(source_system: Any, delivery_status: Any, is_cancelled: Any) -> int:
@@ -146,7 +146,7 @@ def _is_eligible_shipment(source_system: Any, delivery_status: Any, is_cancelled
     source_text = _normalize_text(source_system, fallback="").lower()
     status_text = _normalize_text(delivery_status, fallback="").lower()
     if source_text == "everpro_api":
-        return 1 if status_text in {"delivered", "returned"} else 0
+        return 1 if any(final_status in status_text for final_status in {"delivered", "returned"}) else 0
     return 1 if _is_final_non_cancel_status(delivery_status) else 0
 
 
