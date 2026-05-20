@@ -49,6 +49,9 @@ IN_PROGRESS_STATUSES = {
     "tertunda",
 }
 CANCEL_KEYWORDS = ("cancel", "canceled", "cancelled", "batal", "dibatalkan")
+PAYMENT_ROLE_LABELS = {
+    "1": "Sender Paid",
+}
 
 
 def _text(value: Any, fallback: str = "No Value") -> str:
@@ -140,6 +143,13 @@ def _infer_cod_type(payment_role: Any) -> tuple[str, str]:
     return payment_text, "NON-COD"
 
 
+def _humanize_payment_role(payment_role: Any) -> str:
+    payment_text = _text(payment_role)
+    if payment_text == "No Value":
+        return payment_text
+    return PAYMENT_ROLE_LABELS.get(payment_text, f"Payment Role {payment_text}")
+
+
 def _build_region(item: Dict[str, Any], prefix: str) -> str:
     direct = _dig_value(
         item,
@@ -160,6 +170,16 @@ def _build_region(item: Dict[str, Any], prefix: str) -> str:
     ]
     parts = [part for part in parts if part and part != "No Value"]
     return " / ".join(parts) if parts else "No Value"
+
+
+def _service_type_label(value: Any) -> str:
+    text = _text(value)
+    lowered = text.lower()
+    if "economy" in lowered or "eco" in lowered or "hemat" in lowered:
+        return "Economy"
+    if "standard" in lowered or "regular" in lowered or "reguler" in lowered:
+        return "Reguler"
+    return text
 
 
 def _extract_list(payload: Any) -> List[Dict[str, Any]]:
@@ -226,7 +246,47 @@ def _infer_return_flag_and_reason(
 
 
 def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
-    province, city = _split_region(_build_region(item, "recipient"))
+    province = _dig_text(
+        item,
+        [
+            "deliver_state",
+            "recipient_state",
+            "receiver_state",
+            "recipient_province",
+            "receiver_province",
+            "province",
+        ],
+    )
+    city = _dig_text(
+        item,
+        [
+            "deliver_city",
+            "recipient_city",
+            "receiver_city",
+            "city",
+        ],
+    )
+    if province == "No Value" or city == "No Value":
+        fallback_province, fallback_city = _split_region(_build_region(item, "recipient"))
+        if province == "No Value":
+            province = fallback_province
+        if city == "No Value":
+            city = fallback_city
+    service_type = _service_type_label(
+        _dig_value(
+            item,
+            [
+                "service_type",
+                "product_name",
+                "service_name",
+                "pickup_option",
+                "original_pickup_option",
+                "actual_pickup_option",
+                EXPORT_COLUMNS["original_pickup_option"],
+                EXPORT_COLUMNS["actual_pickup_option"],
+            ],
+        )
+    )
     created_at = _to_datetime(
         _dig_value(
             item,
@@ -293,14 +353,14 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
 
     cod_amount = _to_number(_dig_value(item, ["cod_amount", "cod_value", EXPORT_COLUMNS["cod_amount"]]))
     cod_flag = _dig_text(item, ["cod_collection_flag", "is_cod", EXPORT_COLUMNS["cod_collection_flag"]], fallback="")
-    payment_method, payment_cod_type = _infer_cod_type(
-        _dig_value(item, ["payment_role", "payment_method", "payment_type", EXPORT_COLUMNS["payment_role"]])
-    )
+    payment_role = _dig_value(item, ["payment_role", "payment_method", "payment_type", EXPORT_COLUMNS["payment_role"]])
+    raw_payment_method, payment_cod_type = _infer_cod_type(payment_role)
     cod_type = (
         "COD"
         if cod_amount > 0 or str(cod_flag).lower() in {"1", "true", "y", "yes", "cod"}
         else payment_cod_type
     )
+    payment_method = cod_type
     estimated_shipping_fee = _to_number(
         _dig_value(item, ["estimated_shipping_fee", "shipping_fee", EXPORT_COLUMNS["estimated_shipping_fee"]])
     )
@@ -327,18 +387,9 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
         "province": province,
         "city": city,
         "expedition": "SPX",
-        "service_type": _dig_text(
-            item,
-            [
-                "service_type",
-                "pickup_option",
-                "original_pickup_option",
-                "actual_pickup_option",
-                EXPORT_COLUMNS["original_pickup_option"],
-                EXPORT_COLUMNS["actual_pickup_option"],
-            ],
-        ),
+        "service_type": service_type,
         "payment_method": payment_method,
+        "raw_payment_method": _humanize_payment_role(raw_payment_method),
         "cod_type": cod_type,
         "order_value": _to_number(
             _dig_value(item, ["parcel_value", "order_value", "item_value", EXPORT_COLUMNS["parcel_value"]])

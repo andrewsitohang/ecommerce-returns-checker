@@ -41,6 +41,7 @@ NORMALIZED_ORDER_COLUMNS = [
     "expedition",
     "service_type",
     "payment_method",
+    "raw_payment_method",
     "cod_type",
     "order_value",
     "cod_value",
@@ -614,6 +615,7 @@ def _normalize_everpro_orders(payloads: List[Dict[str, Any]]) -> List[Dict[str, 
                         logistic.get("rate_type_name") or logistic.get("rate_name") or shipment.get("type")
                     ),
                     "payment_method": "COD" if order.get("is_cod") else "NON-COD",
+                    "raw_payment_method": "COD" if order.get("is_cod") else "NON-COD",
                     "cod_type": "COD" if order.get("is_cod") else "NON-COD",
                     "order_value": _to_number(cod.get("total") or order.get("package", {}).get("price")),
                     "cod_value": _to_number(cod.get("total")) if order.get("is_cod") else 0.0,
@@ -644,6 +646,9 @@ def _normalize_api2_source_data(source_mode: str, data: List[Dict[str, Any]]) ->
             normalized["province"] = _normalize_text(normalized.get("province"))
             normalized["city"] = _normalize_text(normalized.get("city"))
             normalized["payment_method"] = _normalize_text(normalized.get("payment_method"))
+            normalized["raw_payment_method"] = _normalize_text(
+                normalized.get("raw_payment_method", normalized.get("payment_method"))
+            )
             normalized["cod_type"] = _normalize_text(normalized.get("cod_type"), fallback="NON-COD")
             normalized["expedition"] = _normalize_text(normalized.get("expedition"), fallback="SPX")
             records.append(normalized)
