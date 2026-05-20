@@ -71,6 +71,8 @@ def _to_datetime(value: Any) -> Optional[datetime]:
     if isinstance(value, (int, float)) or str(value).strip().isdigit():
         try:
             number = float(value)
+            if number <= 0:
+                return None
             if number > 10_000_000_000:
                 number = number / 1000
             return datetime.fromtimestamp(number)
@@ -209,13 +211,14 @@ def _infer_return_flag_and_reason(
 
     if any(key in f"{status_lower} {reason_text}" for key in CANCEL_KEYWORDS):
         return 0, "Cancelled"
-    if status_lower in DELIVERED_STATUSES:
+    if any(status in status_lower for status in DELIVERED_STATUSES):
         return 0, "No Reason Provided"
-    if bool(returned_at) or status_lower in RETURN_STATUSES or "return" in status_lower:
+    if bool(returned_at) or any(status in status_lower for status in RETURN_STATUSES) or "return" in status_lower:
         return 1, failed_reason or delay_reason or status_text or "No Reason Provided"
-    if status_lower in FAILED_FINAL_STATUSES:
+    if any(status in status_lower for status in FAILED_FINAL_STATUSES):
         return 1, failed_reason or delay_reason or status_text or "No Reason Provided"
-    if failed_reason and status_lower not in IN_PROGRESS_STATUSES:
+    is_in_progress = any(status in status_lower for status in IN_PROGRESS_STATUSES)
+    if failed_reason and not is_in_progress:
         return 1, failed_reason
     if failed_reason:
         return 0, failed_reason
@@ -235,6 +238,7 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
             item,
             [
                 "returned_to_sender_at",
+                "returned_time",
                 "return_time",
                 "returning_start_time",
                 "rts_time",
@@ -242,19 +246,42 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
             ],
         )
     )
+    status_group = _dig_text(item, ["tracking_code_group_name"], fallback="")
+    status_subgroup = _dig_text(item, ["tracking_code_subgroup_name"], fallback="")
     delivery_status = _dig_text(
         item,
-        ["delivery_status", "tracking_status", "status", "order_status", "shipment_status", EXPORT_COLUMNS["delivery_status"]],
+        [
+            "delivery_status",
+            "tracking_status",
+            "status",
+            "order_status",
+            "shipment_status",
+            EXPORT_COLUMNS["delivery_status"],
+        ],
         fallback="",
     )
+    if not delivery_status and (status_group or status_subgroup):
+        delivery_status = " / ".join(part for part in [status_group, status_subgroup] if part)
     failed_reason = _dig_text(
         item,
-        ["failed_reason", "failure_reason", "delivery_failed_reason", EXPORT_COLUMNS["failed_reason"]],
+        [
+            "failed_reason",
+            "failure_reason",
+            "delivery_failed_reason",
+            "latest_tracking_reason",
+            EXPORT_COLUMNS["failed_reason"],
+        ],
         fallback="",
     )
     delay_reason = _dig_text(
         item,
-        ["delay_reason", "onhold_reason", "delivery_onhold_reason", EXPORT_COLUMNS["delay_reason"]],
+        [
+            "delay_reason",
+            "onhold_reason",
+            "delivery_onhold_reason",
+            "delivery_on_hold_reason",
+            EXPORT_COLUMNS["delay_reason"],
+        ],
         fallback="",
     )
     return_flag, return_reason = _infer_return_flag_and_reason(
