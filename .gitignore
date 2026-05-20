@@ -11,6 +11,8 @@ airflow-scheduler.pid
 
 # Data outputs/local artifacts
 data/
+spx_downloads/
+dataspx_downloads/
 
 # Python caches/build
 __pycache__/

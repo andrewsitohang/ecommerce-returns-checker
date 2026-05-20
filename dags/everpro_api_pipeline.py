@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
@@ -13,13 +13,13 @@ import psycopg2
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-from spx_web_source import fetch_spx_export_records
+from spx_api_source import fetch_spx_api_records
 
 RAW_SCHEMA = "raw"
 STAGING_SCHEMA = "staging"
 MART_SCHEMA = "mart"
 
-RAW_SPX_WEB_TABLE = "spx_web_order_payloads"
+RAW_SPX_API_TABLE = "spx_api_order_payloads"
 RAW_EVERPRO_API_TABLE = "everpro_api_order_payloads"
 STG_RETURN_SHIPMENTS_TABLE = "stg_return_shipments"
 
@@ -380,8 +380,8 @@ def _get_enabled_return_sources() -> List[str]:
     enabled_sources: List[str] = []
 
     # Preferred explicit config.
-    if _env_bool("SPX_WEB_SOURCE_ENABLED", default=False):
-        enabled_sources.append("spx_web")
+    if _env_bool("SPX_API_SOURCE_ENABLED", default=False):
+        enabled_sources.append("spx_api")
     if _env_bool("EVERPRO_API_SOURCE_ENABLED", default=False):
         enabled_sources.append("everpro_api")
 
@@ -395,7 +395,7 @@ def _get_enabled_return_sources() -> List[str]:
         return [part for part in parts if part]
 
     # Safe default for older envs that only configured SPX.
-    return ["spx_web"]
+    return ["spx_api"]
 
 
 def _everpro_headers() -> Dict[str, str]:
@@ -523,20 +523,14 @@ def _read_raw_payload(table_name: str) -> List[Dict[str, Any]]:
     return payload_obj if isinstance(payload_obj, list) else []
 
 
-def extract_spx_web_raw() -> None:
+def extract_spx_api_raw() -> None:
     q_start, q_end = _get_fetch_range()
     enabled_sources = _get_enabled_return_sources()
-    if "spx_web" not in enabled_sources:
-        _write_raw_payload(RAW_SPX_WEB_TABLE, [], fetch_start_date=q_start, fetch_end_date=q_end)
+    if "spx_api" not in enabled_sources:
+        _write_raw_payload(RAW_SPX_API_TABLE, [], fetch_start_date=q_start, fetch_end_date=q_end)
         return
-    records = fetch_spx_export_records(
-        q_start,
-        q_end,
-        headless=os.getenv("SPX_WEB_HEADLESS", "true").lower() == "true",
-        keep_download=False,
-        output_dir=os.getenv("SPX_WEB_DOWNLOAD_DIR"),
-    )
-    _write_raw_payload(RAW_SPX_WEB_TABLE, records, fetch_start_date=q_start, fetch_end_date=q_end)
+    records = fetch_spx_api_records(q_start, q_end)
+    _write_raw_payload(RAW_SPX_API_TABLE, records, fetch_start_date=q_start, fetch_end_date=q_end)
 
 
 def extract_everpro_api_raw() -> None:
@@ -637,7 +631,7 @@ def _normalize_everpro_orders(payloads: List[Dict[str, Any]]) -> List[Dict[str, 
 
 
 def _normalize_api2_source_data(source_mode: str, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    if source_mode == "spx_web":
+    if source_mode == "spx_api":
         records = []
         for record in data:
             normalized = dict(record)
@@ -899,11 +893,11 @@ def build_returns_reporting_tables() -> None:
     _ensure_schema(conn, STAGING_SCHEMA)
     _ensure_schema(conn, MART_SCHEMA)
 
-    spx_payloads = _read_raw_payload(RAW_SPX_WEB_TABLE)
+    spx_payloads = _read_raw_payload(RAW_SPX_API_TABLE)
     everpro_payloads = _read_raw_payload(RAW_EVERPRO_API_TABLE)
 
     api2_orders: List[Dict[str, Any]] = []
-    api2_orders.extend(_normalize_api2_source_data("spx_web", spx_payloads))
+    api2_orders.extend(_normalize_api2_source_data("spx_api", spx_payloads))
     api2_orders.extend(_normalize_api2_source_data("everpro_api", everpro_payloads))
     returns_raw = pd.DataFrame(api2_orders)
     if returns_raw.empty:
@@ -977,17 +971,21 @@ def validate_returns_outputs() -> None:
 
 with DAG(
     dag_id="returns_api_weekly",
-    description="Weekly return shipment pipeline for SPX web scraping and Everpro API sources",
+    description="Weekly return shipment pipeline for SPX and Everpro API sources",
     schedule="0 1 * * 1",
     start_date=datetime(2025, 1, 1),
     catchup=False,
+    default_args={
+        "retries": 2,
+        "retry_delay": timedelta(minutes=10),
+    },
     max_active_runs=1,
     max_active_tasks=1,
     tags=["etl", "returns", "spx", "everpro", "analytics"],
 ) as dag:
-    extract_spx_web = PythonOperator(
-        task_id="extract_spx_web_shipments",
-        python_callable=extract_spx_web_raw,
+    extract_spx_api = PythonOperator(
+        task_id="extract_spx_api_shipments",
+        python_callable=extract_spx_api_raw,
     )
 
     extract_everpro_api = PythonOperator(
@@ -1005,4 +1003,4 @@ with DAG(
         python_callable=validate_returns_outputs,
     )
 
-    [extract_spx_web, extract_everpro_api] >> build_reporting_tables >> validate_outputs
+    [extract_spx_api, extract_everpro_api] >> build_reporting_tables >> validate_outputs

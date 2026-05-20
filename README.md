@@ -1,7 +1,7 @@
 # Return Shipment Analytics
 
 Project ini membangun pipeline return shipment mingguan dari dua source:
-- `SPX` melalui web scraping
+- `SPX` melalui direct API
 - `Everpro` melalui API
 
 Output akhirnya disimpan ke Postgres untuk kebutuhan dashboard dan analitik return rate.
@@ -9,11 +9,11 @@ Output akhirnya disimpan ke Postgres untuk kebutuhan dashboard dan analitik retu
 ## Pipeline
 
 Source yang didukung:
-- `SPX web scraping`
+- `SPX direct API`
 - `Everpro API`
 
 Graph DAG:
-- `extract_spx_web_shipments`
+- `extract_spx_api_shipments`
 - `extract_everpro_api_orders`
 - `build_returns_reporting_tables`
 - `validate_returns_outputs`
@@ -23,7 +23,7 @@ DAG:
 - dag id: `returns_api_weekly`
 
 Perilaku load:
-- SPX otomatis memecah range panjang menjadi beberapa chunk supaya export UI lebih stabil.
+- SPX mengambil shipment langsung dari endpoint API internal SPX.
 - Raw payload disimpan append per run, bukan mengganti histori raw.
 - Staging memakai upsert berdasarkan `source_system` dan `order_id`.
 - Mart dihitung di PostgreSQL hanya untuk minggu yang terdampak oleh data run terbaru.
@@ -32,7 +32,7 @@ Perilaku load:
 ## Database Output
 
 Schema `raw`
-- `raw.spx_web_order_payloads`
+- `raw.spx_api_order_payloads`
 - `raw.everpro_api_order_payloads`
 
 Schema `staging`
@@ -47,7 +47,7 @@ Schema `mart`
 
 ### Source controls
 ```env
-SPX_WEB_SOURCE_ENABLED=true
+SPX_API_SOURCE_ENABLED=true
 EVERPRO_API_SOURCE_ENABLED=true
 RETURNS_FETCH_START_DATE=
 RETURNS_FETCH_END_DATE=
@@ -55,24 +55,16 @@ RETURNS_FETCH_END_DATE=
 
 Jika `RETURNS_FETCH_START_DATE` dan `RETURNS_FETCH_END_DATE` kosong, pipeline mengambil data dari 1 Januari tahun berjalan sampai tanggal run. Isi salah satu atau keduanya jika butuh range backfill eksplisit.
 
-### SPX web scraping source
+### SPX API source
 ```env
-SPX_WEB_LOGIN_URL=https://spx.co.id/
-SPX_WEB_TRACKING_URL=https://spx.co.id/spx-admin/order/trackings
-SPX_WEB_USERNAME=YOUR_SPX_USERNAME
-SPX_WEB_PASSWORD=YOUR_SPX_PASSWORD
-SPX_WEB_HEADLESS=true
-SPX_WEB_DOWNLOAD_DIR=/opt/airflow/data/spx_downloads
-SPX_WEB_POST_LOGIN_WAIT_FOR=load
-SPX_WEB_DATE_CHUNK_DAYS=14
-SPX_WEB_GOTO_RETRIES=3
-SPX_WEB_TIMEOUT_MS=120000
-SPX_WEB_DOWNLOAD_TIMEOUT_MS=180000
-SPX_EXPORT_READY_TIMEOUT_SECONDS=900
-SPX_EXPORT_RETRY_INTERVAL_SECONDS=5
+SPX_API_SPX_TOKEN=
+SPX_API_SPX_SID=
+SPX_API_PAGE_SIZE=100
+SPX_API_TIMEOUT_SECONDS=60
 ```
 
-Untuk GCP yang kurang stabil, turunkan `SPX_WEB_DATE_CHUNK_DAYS` ke `7`. `SPX_WEB_GOTO_RETRIES` dipakai saat halaman SPX lambat membuka URL tracking.
+SPX API source memakai endpoint `shipment/order/logistic/order/list_all_order`, bukan `mass_create_history/list`, karena `mass_create_history/list` hanya riwayat pembuatan order massal.
+Pengaturan paging dan retry mengikuti konfigurasi global `API_*`.
 
 ### Everpro API source
 ```env
