@@ -724,9 +724,14 @@ def _create_empty_mart_tables(conn: psycopg2.extensions.connection) -> None:
             "return_reason" TEXT,
             "total_shipments" BIGINT,
             "total_returns" BIGINT,
+            "reason_share" DOUBLE PRECISION,
             "return_rate" DOUBLE PRECISION
         )
         """
+    )
+    cur.execute(
+        f'ALTER TABLE "{MART_SCHEMA}"."{RETURNS_REASON_TABLE}" '
+        f'ADD COLUMN IF NOT EXISTS "reason_share" DOUBLE PRECISION'
     )
     cur.execute(
         f"""
@@ -812,19 +817,43 @@ def _refresh_returns_marts_sql(
     cur.execute(
         f"""
         INSERT INTO "{MART_SCHEMA}"."{RETURNS_REASON_TABLE}"
+        WITH grouped AS (
+            SELECT
+                EXTRACT(YEAR FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "year",
+                EXTRACT(WEEK FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "week_of_year",
+                COALESCE(NULLIF(s."province"::text, ''), 'No Value') AS "province",
+                COALESCE(NULLIF(s."city"::text, ''), 'No Value') AS "city",
+                COALESCE(NULLIF(s."expedition"::text, ''), 'No Value') AS "expedition",
+                COALESCE(NULLIF(s."service_type"::text, ''), 'No Value') AS "service_type",
+                COALESCE(NULLIF(s."return_reason"::text, ''), 'No Reason Provided') AS "return_reason",
+                COUNT(*)::bigint AS "total_shipments",
+                SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::bigint AS "total_returns"
+            {base_sql}
+            GROUP BY 1,2,3,4,5,6,7
+        )
         SELECT
-            EXTRACT(YEAR FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "year",
-            EXTRACT(WEEK FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "week_of_year",
-            COALESCE(NULLIF(s."province"::text, ''), 'No Value') AS "province",
-            COALESCE(NULLIF(s."city"::text, ''), 'No Value') AS "city",
-            COALESCE(NULLIF(s."expedition"::text, ''), 'No Value') AS "expedition",
-            COALESCE(NULLIF(s."service_type"::text, ''), 'No Value') AS "service_type",
-            COALESCE(NULLIF(s."return_reason"::text, ''), 'No Reason Provided') AS "return_reason",
-            COUNT(*)::bigint AS "total_shipments",
-            SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::bigint AS "total_returns",
-            SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::double precision / NULLIF(COUNT(*), 0) AS "return_rate"
-        {base_sql}
-        GROUP BY 1,2,3,4,5,6,7
+            "year",
+            "week_of_year",
+            "province",
+            "city",
+            "expedition",
+            "service_type",
+            "return_reason",
+            "total_shipments",
+            "total_returns",
+            "total_returns"::double precision / NULLIF(
+                SUM("total_returns") OVER (
+                    PARTITION BY "year", "week_of_year", "province", "city", "expedition", "service_type"
+                ),
+                0
+            ) AS "reason_share",
+            "total_returns"::double precision / NULLIF(
+                SUM("total_returns") OVER (
+                    PARTITION BY "year", "week_of_year", "province", "city", "expedition", "service_type"
+                ),
+                0
+            ) AS "return_rate"
+        FROM grouped
         """
     )
 
