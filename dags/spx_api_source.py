@@ -8,6 +8,11 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import requests
 
+try:
+    from returns_config import env
+except ImportError:  # pragma: no cover - package import path for tests
+    from dags.returns_config import env
+
 
 EXPORT_COLUMNS = {
     "tracking_no": "Nomer Resi",
@@ -412,8 +417,8 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _headers() -> Dict[str, str]:
-    token = os.getenv("SPX_API_SPX_TOKEN", "").strip()
-    sid = os.getenv("SPX_API_SPX_SID", "").strip()
+    token = env("SPX_API_SPX_TOKEN", "").strip()
+    sid = env("SPX_API_SPX_SID", "").strip()
     if not token or not sid:
         raise ValueError(
             "SPX API requires both SPX_API_SPX_TOKEN and SPX_API_SPX_SID."

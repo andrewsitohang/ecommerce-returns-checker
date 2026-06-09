@@ -57,8 +57,11 @@ Jika `RETURNS_FETCH_START_DATE` dan `RETURNS_FETCH_END_DATE` kosong, pipeline me
 
 ### SPX API source
 ```env
-SPX_API_SPX_TOKEN=
-SPX_API_SPX_SID=
+SPX_API_SPX_TOKEN_FILE=/opt/airflow/secrets/spx_token
+SPX_API_SPX_SID_FILE=/opt/airflow/secrets/spx_sid
+# fallback jika tidak pakai file secret:
+# SPX_API_SPX_TOKEN=
+# SPX_API_SPX_SID=
 SPX_API_PAGE_SIZE=100
 SPX_API_TIMEOUT_SECONDS=60
 ```
@@ -69,8 +72,11 @@ Pengaturan paging dan retry mengikuti konfigurasi global `API_*`.
 ### Everpro API source
 ```env
 EVERPRO_API_BASE_URL=https://customer.everpro.id
-EVERPRO_API_TOKEN=YOUR_EVERPRO_ACCESS_TOKEN
-EVERPRO_REFRESH_TOKEN=YOUR_EVERPRO_REFRESH_TOKEN
+EVERPRO_API_TOKEN_FILE=/opt/airflow/secrets/everpro_api_token
+EVERPRO_REFRESH_TOKEN_FILE=/opt/airflow/secrets/everpro_refresh_token
+# fallback jika tidak pakai file secret:
+# EVERPRO_API_TOKEN=YOUR_EVERPRO_ACCESS_TOKEN
+# EVERPRO_REFRESH_TOKEN=YOUR_EVERPRO_REFRESH_TOKEN
 EVERPRO_API_LIMIT=100
 ```
 
@@ -83,14 +89,36 @@ API_NETWORK_MAX_RETRIES=8
 API_FATAL_ON_5XX=false
 ```
 
+### Data quality validation
+```env
+VALIDATION_MIN_STAGING_ROWS=100
+VALIDATION_MIN_ELIGIBLE_ROWS=10
+VALIDATION_MAX_SPX_NO_VALUE_RATIO=0.05
+```
+
+`validate_returns_outputs` akan fail jika hasil pipeline terlalu sedikit, source aktif tidak mengisi data, mart kosong, atau rasio `No Value` SPX untuk `province/city/service_type` melewati threshold.
+
 ### Database
 ```env
 DB_HOST=postgres
 DB_PORT=5432
 DB_NAME=returns_db
 DB_USER=admin
-DB_PASSWORD=CHANGE_ME
+DB_PASSWORD_FILE=/opt/airflow/secrets/db_password
+# fallback jika tidak pakai file secret:
+# DB_PASSWORD=CHANGE_ME
 ```
+
+Pipeline mendukung pola `*_FILE` untuk secret source dan password DB pada level DAG. Contoh file yang perlu dibuat di folder lokal `./secrets`:
+
+- `secrets/db_password`
+- `secrets/spx_token`
+- `secrets/spx_sid`
+- `secrets/everpro_api_token`
+- `secrets/everpro_refresh_token`
+
+Folder lokal `./secrets` dimount ke `/opt/airflow/secrets` di container Airflow.
+Untuk stack Compose, `DB_PASSWORD_FILE` sekarang juga dipakai oleh service `postgres`, `airflow-init`, `airflow-webserver`, dan `airflow-scheduler`, jadi tidak perlu lagi mengisi `DB_PASSWORD` dengan path file.
 
 ## Run
 
@@ -105,6 +133,15 @@ docker compose up -d
 ```
 
 3. Trigger DAG `returns_api_weekly` dari Airflow UI atau CLI.
+
+## Tests
+
+Unit test mapper source bisa dijalankan di container Airflow:
+
+```bash
+docker compose -f docker-compose.public.yml exec -T airflow-webserver \
+  python -m unittest discover -s /opt/airflow/tests -t /opt/airflow -p "test_*.py" -v
+```
 
 ## Public Stack
 

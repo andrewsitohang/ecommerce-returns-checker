@@ -5,7 +5,6 @@ x-airflow-common: &airflow-common
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER:-airflow}:${DB_PASSWORD:-airflow}@postgres/${DB_NAME:-airflow}
     AIRFLOW__SCHEDULER__TASK_INSTANCE_HEARTBEAT_TIMEOUT: "1800"
     AIRFLOW__SCHEDULER__TASK_INSTANCE_HEARTBEAT_TIMEOUT_DETECTION_INTERVAL: "120"
     AIRFLOW__SCHEDULER__ZOMBIE_DETECTION_INTERVAL: "120"
@@ -13,6 +12,9 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
+    - ./scripts:/opt/project-scripts:ro
+    - ./tests:/opt/airflow/tests
+    - ./secrets:/opt/airflow/secrets:ro
     - ./data:/opt/airflow/data
   user: "${AIRFLOW_UID:-50000}:0"
   extra_hosts:
@@ -26,12 +28,13 @@ x-airflow-common: &airflow-common
 services:
   postgres:
     image: postgres:16
-    environment:
-      POSTGRES_USER: ${DB_USER:-airflow}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-airflow}
-      POSTGRES_DB: ${DB_NAME:-airflow}
+    env_file: .env
+    entrypoint: ["/bin/bash", "/opt/project-scripts/postgres-with-db-password.sh"]
     volumes:
+      - ./scripts:/opt/project-scripts:ro
+      - ./secrets:/opt/airflow/secrets:ro
       - postgres-db-volume:/var/lib/postgresql/data
+    command: ["postgres"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d returns_db"]
       interval: 10s
@@ -45,13 +48,14 @@ services:
   airflow-init:
     <<: *airflow-common
     env_file: .env
-    entrypoint: /bin/bash
-    command: -c "airflow db migrate && airflow users create --username ${AIRFLOW_ADMIN_USER:-airflow} --password ${AIRFLOW_ADMIN_PASSWORD:-airflow} --firstname Air --lastname Flow --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com}"
+    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
+    command: ["/bin/bash", "-lc", "airflow db migrate && airflow users create --username ${AIRFLOW_ADMIN_USER:-airflow} --password ${AIRFLOW_ADMIN_PASSWORD:-airflow} --firstname Air --lastname Flow --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com}"]
 
   airflow-webserver:
     <<: *airflow-common
     env_file: .env
-    command: webserver
+    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
+    command: ["airflow", "webserver"]
     environment:
       <<: *airflow-common-env
       AIRFLOW__WEBSERVER__BASE_URL: ${AIRFLOW_PUBLIC_BASE_URL}
@@ -66,7 +70,8 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     env_file: .env
-    command: scheduler
+    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
+    command: ["airflow", "scheduler"]
     restart: always
 
   caddy:
