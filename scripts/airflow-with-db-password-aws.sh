@@ -18,7 +18,7 @@ if [[ -z "$DB_PASSWORD_CONTENT" ]]; then
   echo "Either DB_PASSWORD_FILE or DB_PASSWORD must be set." >&2
   exit 1
 fi
-export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://${DB_USER:-airflow}:${DB_PASSWORD_CONTENT}@postgres/${DB_NAME:-airflow}"
+export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://${DB_USER:-airflow}:${DB_PASSWORD_CONTENT}@${DB_HOST:-postgres}/${DB_NAME:-airflow}?sslmode=require"
 
 # ── Airflow core secrets (Fernet key, webserver secret key) ──
 FERNET_KEY="$(read_secret AIRFLOW__CORE__FERNET_KEY_FILE AIRFLOW__CORE__FERNET_KEY)"

@@ -17,62 +17,37 @@ x-airflow-common: &airflow-common
     - ./secrets:/opt/airflow/secrets:ro
     - ./data:/opt/airflow/data
   user: "${AIRFLOW_UID:-50000}:0"
-  extra_hosts:
-    - "postgres:172.28.0.10"
-  networks:
-    returns-net:
-  depends_on:
-    postgres:
-      condition: service_healthy
+  restart: always
 
 services:
-  postgres:
-    image: postgres:16
-    env_file: .env
-    entrypoint: ["/bin/bash", "/opt/project-scripts/postgres-with-db-password.sh"]
-    volumes:
-      - ./scripts:/opt/project-scripts:ro
-      - ./secrets:/opt/airflow/secrets:ro
-      - postgres-db-volume:/var/lib/postgresql/data
-    command: ["postgres"]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d returns_db"]
-      interval: 10s
-      retries: 5
-      start_period: 5s
-    restart: always
-    networks:
-      returns-net:
-        ipv4_address: 172.28.0.10
-
   airflow-init:
     <<: *airflow-common
     env_file: .env
-    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
+    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password-aws.sh"]
     command: ["/bin/bash", "-lc", "airflow db migrate && airflow users create --username ${AIRFLOW_ADMIN_USER:-airflow} --password ${AIRFLOW_ADMIN_PASSWORD:-airflow} --firstname Air --lastname Flow --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com}"]
 
   airflow-webserver:
     <<: *airflow-common
     env_file: .env
-    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
+    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password-aws.sh"]
     command: ["airflow", "webserver"]
     environment:
       <<: *airflow-common-env
       AIRFLOW__WEBSERVER__BASE_URL: ${AIRFLOW_PUBLIC_BASE_URL}
       AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: "True"
+    ports:
+      - "8080:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-    restart: always
 
   airflow-scheduler:
     <<: *airflow-common
     env_file: .env
-    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
+    entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password-aws.sh"]
     command: ["airflow", "scheduler"]
-    restart: always
 
   caddy:
     image: caddy:2.8
@@ -90,8 +65,6 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     restart: always
-    networks:
-      returns-net:
 
   metabase:
     image: metabase/metabase:v0.56.5
@@ -103,23 +76,10 @@ services:
       MB_DB_USER: ${METABASE_DB_USER:-metabase}
       MB_DB_HOST: ${METABASE_DB_HOST:-postgres}
       MB_SITE_URL: ${METABASE_PUBLIC_BASE_URL}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    extra_hosts:
-      - "postgres:172.28.0.10"
+    ports:
+      - "3000:3000"
     restart: always
-    networks:
-      returns-net:
 
 volumes:
-  postgres-db-volume:
   caddy-data:
   caddy-config:
-
-networks:
-  returns-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/24

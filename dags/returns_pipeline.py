@@ -379,7 +379,7 @@ def validate_returns_outputs() -> None:
 with DAG(
     dag_id="returns_api_weekly",
     description="Weekly return shipment pipeline for SPX and Everpro API sources",
-    schedule="0 1 * * 1",
+    schedule="0 19 * * 1",
     start_date=datetime(2025, 1, 1),
     catchup=False,
     default_args={
