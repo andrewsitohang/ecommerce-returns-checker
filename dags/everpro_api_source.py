@@ -101,6 +101,12 @@ def _fetch_paged(url: str, params: Dict[str, Any], headers: Dict[str, str]) -> L
 
     while True:
         if page > max_pages:
+            print(
+                f"WARNING: Everpro API fetch stopped after hitting API_MAX_PAGES={max_pages} "
+                f"({len(results)} pages collected so far). The last page was still full, so there "
+                "may be more data beyond this cap; increase API_MAX_PAGES if the true order count "
+                "is expected to be higher."
+            )
             break
         params["page"] = page
         params["limit"] = limit

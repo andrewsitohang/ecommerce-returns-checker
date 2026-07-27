@@ -78,24 +78,40 @@ def df_to_postgres(
     cur.execute(f'CREATE TABLE IF NOT EXISTS "{schema}"."{table_name}" ({", ".join(column_defs)})')
     cur.execute(
         """
-        SELECT column_name
+        SELECT column_name, data_type
         FROM information_schema.columns
         WHERE table_schema = %s AND table_name = %s
-        ORDER BY ordinal_position
         """,
         (schema, table_name),
     )
-    existing_cols = [row[0] for row in cur.fetchall()]
-    if existing_cols != list(df.columns):
-        cur.execute(f'DROP TABLE IF EXISTS "{schema}"."{table_name}"')
-        cur.execute(f'CREATE TABLE "{schema}"."{table_name}" ({", ".join(column_defs)})')
+    target_types = {row[0]: row[1] for row in cur.fetchall()}
+
+    # Add any columns that are new to this table (e.g. a newly onboarded source's
+    # raw-payload column) without touching the type of columns that already exist,
+    # so manually-migrated types (DATE, TIMESTAMP, ...) survive across runs.
+    for col in df.columns:
+        if col not in target_types:
+            dtype = df[col].dtype
+            if pd.api.types.is_integer_dtype(dtype):
+                col_type = "BIGINT"
+            elif pd.api.types.is_float_dtype(dtype):
+                col_type = "DOUBLE PRECISION"
+            else:
+                col_type = "TEXT"
+            cur.execute(f'ALTER TABLE "{schema}"."{table_name}" ADD COLUMN "{col}" {col_type}')
+            target_types[col] = col_type
 
     if not unique_keys:
         raise ValueError("unique_keys required for incremental upsert")
 
     key_match = " AND ".join([f't."{k}" = s."{k}"' for k in unique_keys])
     cur.execute(f'DELETE FROM "{schema}"."{table_name}" t USING "{schema}"."{temp_table}" s WHERE {key_match}')
-    cur.execute(f'INSERT INTO "{schema}"."{table_name}" SELECT * FROM "{schema}"."{temp_table}"')
+
+    target_cols = ", ".join(f'"{col}"' for col in df.columns)
+    select_cols = ", ".join(f'"{col}"::{target_types[col]}' for col in df.columns)
+    cur.execute(
+        f'INSERT INTO "{schema}"."{table_name}" ({target_cols}) SELECT {select_cols} FROM "{schema}"."{temp_table}"'
+    )
     cur.execute(f'DROP TABLE IF EXISTS "{schema}"."{temp_table}"')
     conn.commit()
     cur.close()
@@ -196,5 +212,7 @@ def read_raw_payload(table_name: str, raw_schema: str) -> List[dict[str, Any]]:
     conn.close()
     if not row:
         return []
-    payload_obj = json.loads(row[0])
+    # psycopg2 auto-decodes a jsonb column into a native list/dict; a text column
+    # still comes back as a raw string that needs an explicit json.loads.
+    payload_obj = row[0] if isinstance(row[0], (list, dict)) else json.loads(row[0])
     return payload_obj if isinstance(payload_obj, list) else []

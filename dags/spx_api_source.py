@@ -397,7 +397,10 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
         "raw_payment_method": _humanize_payment_role(raw_payment_method),
         "cod_type": cod_type,
         "order_value": _to_number(
-            _dig_value(item, ["parcel_value", "order_value", "item_value", EXPORT_COLUMNS["parcel_value"]])
+            _dig_value(
+                item,
+                ["parcel_value", "order_value", "item_value", "express_insured_value", EXPORT_COLUMNS["parcel_value"]],
+            )
         ),
         "cod_value": cod_amount,
         "shipping_fee": actual_shipping_fee if actual_shipping_fee > 0 else estimated_shipping_fee,
@@ -512,6 +515,13 @@ def fetch_spx_api_records(start_date: str, end_date: str) -> List[Dict[str, Any]
         if total is not None and len(records) >= total:
             break
         time.sleep(sleep_seconds)
+    else:
+        print(
+            f"WARNING: SPX API fetch stopped after hitting API_MAX_PAGES={max_pages} "
+            f"({len(records)} records collected so far) for range {start_date}..{end_date}. "
+            "The last page was still full, so there may be more data beyond this cap; "
+            "increase API_MAX_PAGES if the true order count is expected to be higher."
+        )
 
     deduped_records: List[Dict[str, Any]] = []
     seen_order_ids: set[str] = set()
