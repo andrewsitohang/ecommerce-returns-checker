@@ -506,6 +506,14 @@ def fetch_spx_api_records(start_date: str, end_date: str) -> List[Dict[str, Any]
         response.raise_for_status()
 
         payload = response.json()
+        if isinstance(payload, dict) and payload.get("retcode") not in (0, None):
+            raise RuntimeError(
+                f"SPX API returned an error payload on page {page_no} despite HTTP "
+                f"{response.status_code}: retcode={payload.get('retcode')} "
+                f"message={payload.get('message')!r} detail={payload.get('detail')!r}. "
+                "This is an SPX-side backend error (not an auth/cookie problem); the task "
+                "will retry per the DAG's retry policy."
+            )
         page_items = _extract_list(payload)
         records.extend(_normalize_order(item) for item in page_items)
 
