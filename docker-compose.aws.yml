@@ -53,31 +53,17 @@ services:
     image: caddy:2.8
     depends_on:
       - airflow-webserver
-      - metabase
     ports:
       - "80:80"
       - "443:443"
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
       METABASE_PUBLIC_DOMAIN: ${METABASE_PUBLIC_DOMAIN}
+      METABASE_HOST: ${METABASE_HOST:-metabase:3000}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-    restart: always
-
-  metabase:
-    image: metabase/metabase:v0.56.5
-    env_file: .env
-    environment:
-      MB_DB_TYPE: postgres
-      MB_DB_DBNAME: ${METABASE_DB_NAME:-metabase}
-      MB_DB_PORT: ${METABASE_DB_PORT:-5432}
-      MB_DB_USER: ${METABASE_DB_USER:-metabase}
-      MB_DB_HOST: ${METABASE_DB_HOST:-postgres}
-      MB_SITE_URL: ${METABASE_PUBLIC_BASE_URL}
-    ports:
-      - "3000:3000"
     restart: always
 
 volumes:

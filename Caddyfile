@@ -10,6 +10,6 @@
 }
 
 {$METABASE_PUBLIC_DOMAIN} {
-    reverse_proxy metabase:3000
+    reverse_proxy {$METABASE_HOST}
     encode gzip
 }
