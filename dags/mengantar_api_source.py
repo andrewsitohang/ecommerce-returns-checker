@@ -238,7 +238,7 @@ def fetch_mengantar_api_records(start_date: str, end_date: str) -> List[Dict[str
     page_size = int(os.getenv("MENGANTAR_API_PAGE_SIZE", "50"))
     max_pages = int(os.getenv("API_MAX_PAGES", "50"))
     sleep_seconds = float(os.getenv("API_RATE_SLEEP", "1.0"))
-    courier = os.getenv("MENGANTAR_API_COURIER", "JNE")
+    courier = os.getenv("MENGANTAR_API_COURIER", "all")
     plan = os.getenv("MENGANTAR_API_PLAN", "Standart JNE")
 
     date_range = json.dumps(
@@ -292,10 +292,14 @@ def fetch_mengantar_api_records(start_date: str, end_date: str) -> List[Dict[str
         page_items = _extract_list(payload)
         records.extend(_normalize_order(item) for item in page_items)
 
+        # The API's own "total"/"count" fields are only populated when the
+        # request body also sets getCount=True, in which case "data" comes
+        # back empty instead (it's a separate count-only query mode). So a
+        # short page is the only reliable end-of-results signal here.
         total = _payload_total(payload)
         if not page_items or len(page_items) < page_size:
             break
-        if total is not None and len(records) >= total:
+        if total is not None and total > 0 and len(records) >= total:
             break
         time.sleep(sleep_seconds)
 
