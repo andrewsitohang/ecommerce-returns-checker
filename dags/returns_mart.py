@@ -136,6 +136,22 @@ def refresh_returns_marts_sql(
                 SUM(COALESCE(NULLIF(s."order_value"::text, ''), '0')::double precision) AS "total_order_value"
             {base_sql}
             GROUP BY 1,2,3,4,5,6,7
+
+            UNION ALL
+
+            SELECT
+                EXTRACT(YEAR FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "year",
+                EXTRACT(WEEK FROM NULLIF(s."event_date"::text, '')::date)::bigint AS "week_of_year",
+                COALESCE(NULLIF(s."province"::text, ''), 'No Value') AS "province",
+                COALESCE(NULLIF(s."city"::text, ''), 'No Value') AS "city",
+                COALESCE(NULLIF(s."expedition"::text, ''), 'No Value') AS "expedition",
+                'source_system'::text AS "driver_type",
+                COALESCE(NULLIF(s."source_system"::text, ''), 'No Value') AS "driver_value",
+                COUNT(*)::bigint AS "total_shipments",
+                SUM(COALESCE(NULLIF(s."return_flag"::text, ''), '0')::bigint)::bigint AS "total_returns",
+                SUM(COALESCE(NULLIF(s."order_value"::text, ''), '0')::double precision) AS "total_order_value"
+            {base_sql}
+            GROUP BY 1,2,3,4,5,6,7
         ),
         scored AS (
             SELECT
