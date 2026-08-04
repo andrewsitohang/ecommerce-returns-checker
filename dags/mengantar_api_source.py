@@ -134,6 +134,10 @@ def _payload_total(payload: Any) -> Optional[int]:
 DELIVERED_STATUSES = {"delivered", "terkirim", "diterima"}
 RETURN_STATUSES = {"returned", "return", "return to sender", "rts", "retur", "dikembalikan"}
 CANCEL_KEYWORDS = ("cancel", "canceled", "cancelled", "batal", "dibatalkan")
+# Mirrors spx_api_source.py's FAILED_FINAL_STATUSES: a parcel that's lost/damaged
+# never reaches the receiver, so it counts as a return-worthy outcome even though
+# Mengantar's own status text doesn't use the word "return".
+FAILED_STATUSES = {"lost", "missing", "damaged", "problem", "hilang", "rusak"}
 
 
 def _contains_word(text: str, keywords) -> bool:
@@ -149,6 +153,8 @@ def _infer_return_flag_and_reason(status_text: str) -> tuple[int, str]:
     if _contains_word(status_lower, DELIVERED_STATUSES):
         return 0, "No Reason Provided"
     if _contains_word(status_lower, RETURN_STATUSES):
+        return 1, status_text or "No Reason Provided"
+    if _contains_word(status_lower, FAILED_STATUSES):
         return 1, status_text or "No Reason Provided"
     return 0, "No Reason Provided"
 
