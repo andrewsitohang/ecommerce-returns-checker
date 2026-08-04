@@ -136,8 +136,16 @@ RETURN_STATUSES = {"returned", "return", "return to sender", "rts", "retur", "di
 CANCEL_KEYWORDS = ("cancel", "canceled", "cancelled", "batal", "dibatalkan")
 # Mirrors spx_api_source.py's FAILED_FINAL_STATUSES: a parcel that's lost/damaged
 # never reaches the receiver, so it counts as a return-worthy outcome even though
-# Mengantar's own status text doesn't use the word "return".
-FAILED_STATUSES = {"lost", "missing", "damaged", "problem", "hilang", "rusak"}
+# Mengantar's own status text doesn't use the word "return". Keywords cover both
+# the English and Indonesian status labels seen in Mengantar's own status-filter
+# UI ("Gagal Kirim", "Tertahan", "Kendala transportasi", "Pengiriman Terkendala",
+# "Masalah pengiriman", "Paket Hilang", "Shipment breach"). "Error" and "Unpaid
+# Order" are deliberately excluded: they don't clearly mean the parcel failed
+# in transit, so treating them as returns would be guessing.
+FAILED_STATUSES = {
+    "lost", "missing", "damaged", "problem", "breach",
+    "hilang", "rusak", "tertahan", "kendala", "terkendala", "gagal", "masalah",
+}
 
 
 def _contains_word(text: str, keywords) -> bool:
