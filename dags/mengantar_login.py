@@ -31,7 +31,9 @@ def _wait_for_first_visible(page: Any, selectors: List[str], timeout_ms: int) ->
 
 
 def _write_debug_artifacts(page: Any, prefix: str) -> str:
-    debug_dir = Path(os.getenv("MENGANTAR_WEB_DEBUG_DIR", "/opt/airflow/data/mengantar_login_debug"))
+    debug_dir = Path(
+        os.getenv("MENGANTAR_WEB_DEBUG_DIR", "/opt/airflow/data/mengantar_login_debug")
+    )
     try:
         debug_dir.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(debug_dir / f"{prefix}.png"), full_page=True)

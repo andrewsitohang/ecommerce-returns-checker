@@ -124,7 +124,11 @@ def _extract_list(payload: Any) -> List[Dict[str, Any]]:
 
 
 def _payload_total(payload: Any) -> Optional[int]:
-    value = _dig_value(payload, ["total", "totalCount", "total_count", "count"]) if isinstance(payload, dict) else None
+    value = (
+        _dig_value(payload, ["total", "totalCount", "total_count", "count"])
+        if isinstance(payload, dict)
+        else None
+    )
     try:
         return int(value)
     except Exception:
@@ -143,8 +147,18 @@ CANCEL_KEYWORDS = ("cancel", "canceled", "cancelled", "batal", "dibatalkan")
 # Order" are deliberately excluded: they don't clearly mean the parcel failed
 # in transit, so treating them as returns would be guessing.
 FAILED_STATUSES = {
-    "lost", "missing", "damaged", "problem", "breach",
-    "hilang", "rusak", "tertahan", "kendala", "terkendala", "gagal", "masalah",
+    "lost",
+    "missing",
+    "damaged",
+    "problem",
+    "breach",
+    "hilang",
+    "rusak",
+    "tertahan",
+    "kendala",
+    "terkendala",
+    "gagal",
+    "masalah",
 }
 
 
@@ -168,7 +182,9 @@ def _infer_return_flag_and_reason(status_text: str) -> tuple[int, str]:
 
 
 def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
-    province = _dig_text(item, ["receiver_region", "receiver_province", "province", "destination_province"])
+    province = _dig_text(
+        item, ["receiver_region", "receiver_province", "province", "destination_province"]
+    )
     city = _dig_text(item, ["receiver_city", "city", "destination_city"])
     service_type = _service_type_label(_dig_value(item, ["plan", "service_type", "product"]))
     created_at = _to_datetime(_dig_value(item, ["createdAt", "created_at", "order_date"]))
@@ -178,7 +194,9 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "source_system": "mengantar_api",
-        "order_id": _dig_text(item, ["sttNumber", "stt_number", "tracking", "tracking_number", "order_id"]),
+        "order_id": _dig_text(
+            item, ["sttNumber", "stt_number", "tracking", "tracking_number", "order_id"]
+        ),
         "event_date": created_at.date().isoformat() if created_at else None,
         "province": province,
         "city": city,
@@ -189,7 +207,9 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
         "cod_type": "COD" if cod_value > 0 else "NON-COD",
         "order_value": _to_number(_dig_value(item, ["order_value", "item_value", "goods_amount"])),
         "cod_value": cod_value,
-        "shipping_fee": _to_number(_dig_value(item, ["shipping_fee", "actual_shipping_fee", "price"])),
+        "shipping_fee": _to_number(
+            _dig_value(item, ["shipping_fee", "actual_shipping_fee", "price"])
+        ),
         "return_flag": return_flag,
         "return_reason": return_reason,
         "delivery_status": status_text,
@@ -246,7 +266,9 @@ def fetch_mengantar_api_records(start_date: str, end_date: str) -> List[Dict[str
     start_dt = _to_datetime(start_date)
     end_dt = _to_datetime(end_date)
     if not start_dt or not end_dt:
-        raise ValueError(f"Invalid Mengantar API date range: start_date={start_date}, end_date={end_date}")
+        raise ValueError(
+            f"Invalid Mengantar API date range: start_date={start_date}, end_date={end_date}"
+        )
     end_dt = end_dt.replace(hour=23, minute=59, second=59)
 
     page_size = int(os.getenv("MENGANTAR_API_PAGE_SIZE", "50"))

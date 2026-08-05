@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import date, datetime, timedelta
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from airflow import DAG
@@ -13,16 +13,22 @@ try:
     from everpro_api_source import fetch_everpro_api_payloads, normalize_everpro_api_orders
     from mengantar_api_source import fetch_mengantar_api_records
     from mengantar_login import login_and_refresh_mengantar_cookie
-    from returns_config import env, env_bool
+    from returns_config import env_bool
     from returns_mart import refresh_returns_marts_sql
-    from returns_storage import df_to_postgres, ensure_schema, get_db_connection, read_raw_payload, write_raw_payload
+    from returns_storage import (
+        df_to_postgres,
+        ensure_schema,
+        get_db_connection,
+        read_raw_payload,
+        write_raw_payload,
+    )
     from spx_api_source import fetch_spx_api_records
     from spx_login import login_and_refresh_spx_cookies
 except ImportError:  # pragma: no cover - package import path for tests
     from dags.everpro_api_source import fetch_everpro_api_payloads, normalize_everpro_api_orders
     from dags.mengantar_api_source import fetch_mengantar_api_records
     from dags.mengantar_login import login_and_refresh_mengantar_cookie
-    from dags.returns_config import env, env_bool
+    from dags.returns_config import env_bool
     from dags.returns_mart import refresh_returns_marts_sql
     from dags.returns_storage import (
         df_to_postgres,
@@ -57,6 +63,7 @@ def _contains_word(text: str, keywords: Any) -> bool:
     # Word-boundary match instead of plain substring: "delivered" must not match
     # inside "undelivered", the way `"delivered" in "undelivered"` would.
     return any(re.search(rf"\b{re.escape(keyword)}\b", text) for keyword in keywords)
+
 
 NORMALIZED_ORDER_COLUMNS = [
     "source_system",
@@ -201,33 +208,47 @@ def extract_spx_api_raw() -> None:
     q_start, q_end = _get_fetch_range()
     enabled_sources = _get_enabled_return_sources()
     if "spx_api" not in enabled_sources:
-        write_raw_payload(RAW_SPX_API_TABLE, [], RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end)
+        write_raw_payload(
+            RAW_SPX_API_TABLE, [], RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end
+        )
         return
     records = fetch_spx_api_records(q_start, q_end)
-    write_raw_payload(RAW_SPX_API_TABLE, records, RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end)
+    write_raw_payload(
+        RAW_SPX_API_TABLE, records, RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end
+    )
 
 
 def extract_everpro_api_raw() -> None:
     q_start, q_end = _get_fetch_range()
     enabled_sources = _get_enabled_return_sources()
     if "everpro_api" not in enabled_sources:
-        write_raw_payload(RAW_EVERPRO_API_TABLE, [], RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end)
+        write_raw_payload(
+            RAW_EVERPRO_API_TABLE, [], RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end
+        )
         return
     payloads = fetch_everpro_api_payloads(q_start, q_end)
-    write_raw_payload(RAW_EVERPRO_API_TABLE, payloads, RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end)
+    write_raw_payload(
+        RAW_EVERPRO_API_TABLE, payloads, RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end
+    )
 
 
 def extract_mengantar_api_raw() -> None:
     q_start, q_end = _get_fetch_range()
     enabled_sources = _get_enabled_return_sources()
     if "mengantar_api" not in enabled_sources:
-        write_raw_payload(RAW_MENGANTAR_API_TABLE, [], RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end)
+        write_raw_payload(
+            RAW_MENGANTAR_API_TABLE, [], RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end
+        )
         return
     records = fetch_mengantar_api_records(q_start, q_end)
-    write_raw_payload(RAW_MENGANTAR_API_TABLE, records, RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end)
+    write_raw_payload(
+        RAW_MENGANTAR_API_TABLE, records, RAW_SCHEMA, fetch_start_date=q_start, fetch_end_date=q_end
+    )
 
 
-def _normalize_api2_source_data(source_mode: str, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _normalize_api2_source_data(
+    source_mode: str, data: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     if source_mode == "spx_api":
         records = []
         for record in data:
@@ -237,7 +258,9 @@ def _normalize_api2_source_data(source_mode: str, data: List[Dict[str, Any]]) ->
             normalized["cod_value"] = _to_number(normalized.get("cod_value"))
             normalized["shipping_fee"] = _to_number(normalized.get("shipping_fee"))
             normalized["service_type"] = _normalize_service_type(normalized.get("service_type"))
-            normalized["return_reason"] = _normalize_text(normalized.get("return_reason"), fallback="No Reason Provided")
+            normalized["return_reason"] = _normalize_text(
+                normalized.get("return_reason"), fallback="No Reason Provided"
+            )
             normalized["province"] = _normalize_text(normalized.get("province"))
             normalized["city"] = _normalize_text(normalized.get("city"))
             normalized["payment_method"] = _normalize_text(normalized.get("payment_method"))
@@ -259,7 +282,9 @@ def _normalize_api2_source_data(source_mode: str, data: List[Dict[str, Any]]) ->
             normalized["cod_value"] = _to_number(normalized.get("cod_value"))
             normalized["shipping_fee"] = _to_number(normalized.get("shipping_fee"))
             normalized["service_type"] = _normalize_service_type(normalized.get("service_type"))
-            normalized["return_reason"] = _normalize_text(normalized.get("return_reason"), fallback="No Reason Provided")
+            normalized["return_reason"] = _normalize_text(
+                normalized.get("return_reason"), fallback="No Reason Provided"
+            )
             normalized["province"] = _normalize_text(normalized.get("province"))
             normalized["city"] = _normalize_text(normalized.get("city"))
             normalized["payment_method"] = _normalize_text(normalized.get("payment_method"))
@@ -291,7 +316,13 @@ def build_returns_reporting_tables() -> None:
     if returns_raw.empty:
         returns_raw = pd.DataFrame(
             columns=NORMALIZED_ORDER_COLUMNS
-            + ["delivery_status", "raw_delivery_status", "failed_reason", "delay_reason", "sender_province"]
+            + [
+                "delivery_status",
+                "raw_delivery_status",
+                "failed_reason",
+                "delay_reason",
+                "sender_province",
+            ]
         )
     if "delivery_status" not in returns_raw.columns:
         returns_raw["delivery_status"] = ""
@@ -302,14 +333,16 @@ def build_returns_reporting_tables() -> None:
     if "delay_reason" not in returns_raw.columns:
         returns_raw["delay_reason"] = ""
     returns_raw["is_cancelled"] = returns_raw.apply(
-        lambda row: 1
-        if _has_cancel_keyword(
-            row.get("delivery_status"),
-            row.get("return_reason"),
-            row.get("failed_reason"),
-            row.get("delay_reason"),
-        )
-        else 0,
+        lambda row: (
+            1
+            if _has_cancel_keyword(
+                row.get("delivery_status"),
+                row.get("return_reason"),
+                row.get("failed_reason"),
+                row.get("delay_reason"),
+            )
+            else 0
+        ),
         axis=1,
     )
     returns_raw["is_final_status"] = returns_raw["delivery_status"].apply(
@@ -396,7 +429,9 @@ def validate_returns_outputs() -> None:
         )
         source_rows = cur.fetchone()[0]
         if source_rows <= 0:
-            raise ValueError(f"Validation failed: no rows loaded for enabled source '{source_system}'")
+            raise ValueError(
+                f"Validation failed: no rows loaded for enabled source '{source_system}'"
+            )
 
     if "spx_api" in enabled_sources:
         cur.execute(
@@ -417,7 +452,9 @@ def validate_returns_outputs() -> None:
             "service_type": float(service_type_ratio or 0.0),
         }
         bad_dims = [
-            f"{name}={value:.2%}" for name, value in ratios.items() if value > max_spx_no_value_ratio
+            f"{name}={value:.2%}"
+            for name, value in ratios.items()
+            if value > max_spx_no_value_ratio
         ]
         if bad_dims:
             raise ValueError(
@@ -487,4 +524,8 @@ with DAG(
 
     refresh_spx_login >> extract_spx_api
     refresh_mengantar_login >> extract_mengantar_api
-    [extract_spx_api, extract_everpro_api, extract_mengantar_api] >> build_reporting_tables >> validate_outputs
+    (
+        [extract_spx_api, extract_everpro_api, extract_mengantar_api]
+        >> build_reporting_tables
+        >> validate_outputs
+    )

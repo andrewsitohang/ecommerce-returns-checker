@@ -47,7 +47,7 @@ class TestEverproApiSource(unittest.TestCase):
                                 "price": 125000,
                             },
                         }
-                    ]
+                    ],
                 }
             }
         ]
@@ -109,7 +109,7 @@ class TestEverproApiSource(unittest.TestCase):
                                 "price": 99000,
                             },
                         }
-                    ]
+                    ],
                 }
             }
         ]

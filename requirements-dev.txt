@@ -1,0 +1,5 @@
+-r requirements-airflow.txt
+pytest
+black==24.10.0
+ruff==0.8.4
+pre-commit==4.0.1

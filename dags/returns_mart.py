@@ -27,7 +27,9 @@ def refresh_returns_marts_sql(
         driver_table=driver_table,
     )
     cur = conn.cursor()
-    cur.execute('CREATE TEMP TABLE affected_return_weeks ("year" BIGINT, "week_of_year" BIGINT) ON COMMIT DROP')
+    cur.execute(
+        'CREATE TEMP TABLE affected_return_weeks ("year" BIGINT, "week_of_year" BIGINT) ON COMMIT DROP'
+    )
     cur.executemany(
         'INSERT INTO affected_return_weeks ("year", "week_of_year") VALUES (%s, %s)',
         affected_weeks,
@@ -207,27 +209,27 @@ def _create_reporting_indexes(
 ) -> None:
     cur = conn.cursor()
     cur.execute(
-        f'CREATE INDEX IF NOT EXISTS idx_{staging_table}_source_order '
+        f"CREATE INDEX IF NOT EXISTS idx_{staging_table}_source_order "
         f'ON "{staging_schema}"."{staging_table}" ("source_system", "order_id")'
     )
     cur.execute(
-        f'CREATE INDEX IF NOT EXISTS idx_{staging_table}_event_date '
+        f"CREATE INDEX IF NOT EXISTS idx_{staging_table}_event_date "
         f'ON "{staging_schema}"."{staging_table}" ("event_date")'
     )
     cur.execute(
-        f'CREATE INDEX IF NOT EXISTS idx_{staging_table}_dims '
+        f"CREATE INDEX IF NOT EXISTS idx_{staging_table}_dims "
         f'ON "{staging_schema}"."{staging_table}" ("province", "city", "expedition", "service_type")'
     )
     cur.execute(
-        f'CREATE INDEX IF NOT EXISTS idx_{weekly_table}_week_dims '
+        f"CREATE INDEX IF NOT EXISTS idx_{weekly_table}_week_dims "
         f'ON "{mart_schema}"."{weekly_table}" ("year", "week_of_year", "province", "city", "expedition")'
     )
     cur.execute(
-        f'CREATE INDEX IF NOT EXISTS idx_{reason_table}_week_dims '
+        f"CREATE INDEX IF NOT EXISTS idx_{reason_table}_week_dims "
         f'ON "{mart_schema}"."{reason_table}" ("year", "week_of_year", "province", "city", "expedition")'
     )
     cur.execute(
-        f'CREATE INDEX IF NOT EXISTS idx_{driver_table}_week_dims '
+        f"CREATE INDEX IF NOT EXISTS idx_{driver_table}_week_dims "
         f'ON "{mart_schema}"."{driver_table}" ("year", "week_of_year", "province", "city", "expedition")'
     )
     conn.commit()
@@ -281,7 +283,9 @@ def _create_empty_mart_tables(
         )
         """
     )
-    cur.execute(f'ALTER TABLE "{mart_schema}"."{reason_table}" ADD COLUMN IF NOT EXISTS "reason_share" DOUBLE PRECISION')
+    cur.execute(
+        f'ALTER TABLE "{mart_schema}"."{reason_table}" ADD COLUMN IF NOT EXISTS "reason_share" DOUBLE PRECISION'
+    )
     cur.execute(
         f"""
         CREATE TABLE IF NOT EXISTS "{mart_schema}"."{driver_table}" (

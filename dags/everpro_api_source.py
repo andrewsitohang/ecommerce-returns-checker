@@ -90,7 +90,7 @@ def _fetch_paged(url: str, params: Dict[str, Any], headers: Dict[str, str]) -> L
                 last_error = exc
                 if attempt >= max_network_retries:
                     break
-                retry_delay = min(sleep_seconds * (2 ** attempt), 20.0)
+                retry_delay = min(sleep_seconds * (2**attempt), 20.0)
                 print(
                     f"Retrying API request after network error on page={request_params.get('page')} "
                     f"attempt={attempt + 1}/{max_network_retries} delay={retry_delay:.1f}s error={exc}"
@@ -228,7 +228,9 @@ def normalize_everpro_api_orders(payloads: List[Dict[str, Any]]) -> List[Dict[st
             event_dt = _to_datetime(order.get("created_at"))
             rts_reasons = order.get("rts_reasons") or []
             if isinstance(rts_reasons, list):
-                return_reason = " | ".join(str(reason).strip() for reason in rts_reasons if str(reason).strip())
+                return_reason = " | ".join(
+                    str(reason).strip() for reason in rts_reasons if str(reason).strip()
+                )
             else:
                 return_reason = _normalize_text(rts_reasons, fallback="")
             rts_status = _normalize_text(order.get("rts_status"), fallback="")
@@ -244,7 +246,9 @@ def normalize_everpro_api_orders(payloads: List[Dict[str, Any]]) -> List[Dict[st
             elif everpro_status_name in final_failure_statuses:
                 normalized_status = "Lost"
             else:
-                normalized_status = everpro_status_name.title() if everpro_status_name else "Unknown"
+                normalized_status = (
+                    everpro_status_name.title() if everpro_status_name else "Unknown"
+                )
 
             is_return = normalized_status == "Returned"
             failed_reason = ""
@@ -254,22 +258,33 @@ def normalize_everpro_api_orders(payloads: List[Dict[str, Any]]) -> List[Dict[st
             items.append(
                 {
                     "source_system": "everpro_api",
-                    "order_id": _normalize_text(order.get("awb_number") or order.get("shipment_order_no")),
+                    "order_id": _normalize_text(
+                        order.get("awb_number") or order.get("shipment_order_no")
+                    ),
                     "event_date": event_dt.date() if event_dt else None,
                     "province": _normalize_text(receiver_addr.get("province")),
                     "city": _normalize_text(receiver_addr.get("city")),
                     "expedition": _normalize_text(logistic.get("name")),
                     "service_type": _normalize_service_type(
-                        logistic.get("rate_type_name") or logistic.get("rate_name") or shipment.get("type")
+                        logistic.get("rate_type_name")
+                        or logistic.get("rate_name")
+                        or shipment.get("type")
                     ),
                     "payment_method": "COD" if order.get("is_cod") else "NON-COD",
                     "raw_payment_method": "COD" if order.get("is_cod") else "NON-COD",
                     "cod_type": "COD" if order.get("is_cod") else "NON-COD",
-                    "order_value": _to_number(cod.get("total") or order.get("package", {}).get("price")),
+                    "order_value": _to_number(
+                        cod.get("total") or order.get("package", {}).get("price")
+                    ),
                     "cod_value": _to_number(cod.get("total")) if order.get("is_cod") else 0.0,
-                    "shipping_fee": _to_number(shipment.get("total_price") or shipment.get("price")),
+                    "shipping_fee": _to_number(
+                        shipment.get("total_price") or shipment.get("price")
+                    ),
                     "return_flag": 1 if is_return else 0,
-                    "return_reason": return_reason or rts_status or failed_reason or "No Reason Provided",
+                    "return_reason": return_reason
+                    or rts_status
+                    or failed_reason
+                    or "No Reason Provided",
                     "delivery_status": normalized_status,
                     "raw_delivery_status": shipment_status,
                     "failed_reason": failed_reason,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import uuid
 import unittest
+import uuid
 
 import psycopg2
 
@@ -49,11 +49,91 @@ class TestReturnsMart(unittest.TestCase):
             """
         )
         rows = [
-            ("spx_api", "A1", "2026-05-12", "JAWA BARAT", "BANDUNG", "SPX", "Reguler", "COD", "COD", "100000", "100000", "10000", "1", "Pesanan ditolak pembeli", "1"),
-            ("spx_api", "A2", "2026-05-13", "JAWA BARAT", "BANDUNG", "SPX", "Reguler", "COD", "COD", "100000", "100000", "10000", "1", "Pesanan ditolak pembeli", "1"),
-            ("spx_api", "A3", "2026-05-14", "JAWA BARAT", "BANDUNG", "SPX", "Reguler", "NON-COD", "NON-COD", "80000", "0", "8000", "1", "Alamat tidak lengkap", "1"),
-            ("spx_api", "A4", "2026-05-15", "JAWA BARAT", "BANDUNG", "SPX", "Eco", "NON-COD", "NON-COD", "70000", "0", "7000", "0", "No Reason Provided", "1"),
-            ("spx_api", "A5", "2026-05-16", "JAWA BARAT", "BANDUNG", "SPX", "Eco", "NON-COD", "NON-COD", "70000", "0", "7000", "1", "Kendala operasional jasa kirim", "0")
+            (
+                "spx_api",
+                "A1",
+                "2026-05-12",
+                "JAWA BARAT",
+                "BANDUNG",
+                "SPX",
+                "Reguler",
+                "COD",
+                "COD",
+                "100000",
+                "100000",
+                "10000",
+                "1",
+                "Pesanan ditolak pembeli",
+                "1",
+            ),
+            (
+                "spx_api",
+                "A2",
+                "2026-05-13",
+                "JAWA BARAT",
+                "BANDUNG",
+                "SPX",
+                "Reguler",
+                "COD",
+                "COD",
+                "100000",
+                "100000",
+                "10000",
+                "1",
+                "Pesanan ditolak pembeli",
+                "1",
+            ),
+            (
+                "spx_api",
+                "A3",
+                "2026-05-14",
+                "JAWA BARAT",
+                "BANDUNG",
+                "SPX",
+                "Reguler",
+                "NON-COD",
+                "NON-COD",
+                "80000",
+                "0",
+                "8000",
+                "1",
+                "Alamat tidak lengkap",
+                "1",
+            ),
+            (
+                "spx_api",
+                "A4",
+                "2026-05-15",
+                "JAWA BARAT",
+                "BANDUNG",
+                "SPX",
+                "Eco",
+                "NON-COD",
+                "NON-COD",
+                "70000",
+                "0",
+                "7000",
+                "0",
+                "No Reason Provided",
+                "1",
+            ),
+            (
+                "spx_api",
+                "A5",
+                "2026-05-16",
+                "JAWA BARAT",
+                "BANDUNG",
+                "SPX",
+                "Eco",
+                "NON-COD",
+                "NON-COD",
+                "70000",
+                "0",
+                "7000",
+                "1",
+                "Kendala operasional jasa kirim",
+                "0",
+            ),
         ]
         cur.executemany(
             f'INSERT INTO "{self.staging_schema}"."{self.staging_table}" VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',

@@ -218,7 +218,11 @@ def _extract_list(payload: Any) -> List[Dict[str, Any]]:
 
 
 def _payload_total(payload: Any) -> Optional[int]:
-    value = _dig_value(payload, ["total", "total_count", "count"]) if isinstance(payload, dict) else None
+    value = (
+        _dig_value(payload, ["total", "total_count", "count"])
+        if isinstance(payload, dict)
+        else None
+    )
     try:
         return int(value)
     except Exception:
@@ -238,7 +242,11 @@ def _infer_return_flag_and_reason(
         return 0, "Cancelled"
     if any(status in status_lower for status in DELIVERED_STATUSES):
         return 0, "No Reason Provided"
-    if bool(returned_at) or any(status in status_lower for status in RETURN_STATUSES) or "return" in status_lower:
+    if (
+        bool(returned_at)
+        or any(status in status_lower for status in RETURN_STATUSES)
+        or "return" in status_lower
+    ):
         return 1, failed_reason or delay_reason or status_text or "No Reason Provided"
     if any(status in status_lower for status in FAILED_FINAL_STATUSES):
         return 1, failed_reason or delay_reason or status_text or "No Reason Provided"
@@ -295,7 +303,14 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
     created_at = _to_datetime(
         _dig_value(
             item,
-            ["created_at", "create_time", "created_time", "ctime", "order_create_time", EXPORT_COLUMNS["created_at"]],
+            [
+                "created_at",
+                "create_time",
+                "created_time",
+                "ctime",
+                "order_create_time",
+                EXPORT_COLUMNS["created_at"],
+            ],
         )
     )
     returned_at = _to_datetime(
@@ -356,9 +371,15 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
         returned_at,
     )
 
-    cod_amount = _to_number(_dig_value(item, ["cod_amount", "cod_value", EXPORT_COLUMNS["cod_amount"]]))
-    cod_flag = _dig_text(item, ["cod_collection_flag", "is_cod", EXPORT_COLUMNS["cod_collection_flag"]], fallback="")
-    payment_role = _dig_value(item, ["payment_role", "payment_method", "payment_type", EXPORT_COLUMNS["payment_role"]])
+    cod_amount = _to_number(
+        _dig_value(item, ["cod_amount", "cod_value", EXPORT_COLUMNS["cod_amount"]])
+    )
+    cod_flag = _dig_text(
+        item, ["cod_collection_flag", "is_cod", EXPORT_COLUMNS["cod_collection_flag"]], fallback=""
+    )
+    payment_role = _dig_value(
+        item, ["payment_role", "payment_method", "payment_type", EXPORT_COLUMNS["payment_role"]]
+    )
     raw_payment_method, payment_cod_type = _infer_cod_type(payment_role)
     cod_type = (
         "COD"
@@ -367,10 +388,15 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
     )
     payment_method = cod_type
     estimated_shipping_fee = _to_number(
-        _dig_value(item, ["estimated_shipping_fee", "shipping_fee", EXPORT_COLUMNS["estimated_shipping_fee"]])
+        _dig_value(
+            item,
+            ["estimated_shipping_fee", "shipping_fee", EXPORT_COLUMNS["estimated_shipping_fee"]],
+        )
     )
     actual_shipping_fee = _to_number(
-        _dig_value(item, ["actual_shipping_fee", "actual_fee", EXPORT_COLUMNS["actual_shipping_fee"]])
+        _dig_value(
+            item, ["actual_shipping_fee", "actual_fee", EXPORT_COLUMNS["actual_shipping_fee"]]
+        )
     )
 
     return {
@@ -399,7 +425,13 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
         "order_value": _to_number(
             _dig_value(
                 item,
-                ["parcel_value", "order_value", "item_value", "express_insured_value", EXPORT_COLUMNS["parcel_value"]],
+                [
+                    "parcel_value",
+                    "order_value",
+                    "item_value",
+                    "express_insured_value",
+                    EXPORT_COLUMNS["parcel_value"],
+                ],
             )
         ),
         "cod_value": cod_amount,
@@ -408,7 +440,12 @@ def _normalize_order(item: Dict[str, Any]) -> Dict[str, Any]:
         "return_reason": return_reason,
         "customer_reference_no": _dig_text(
             item,
-            ["customer_reference_no", "reference_no", "ref_no", EXPORT_COLUMNS["customer_reference_no"]],
+            [
+                "customer_reference_no",
+                "reference_no",
+                "ref_no",
+                EXPORT_COLUMNS["customer_reference_no"],
+            ],
         ),
         "delivery_status": delivery_status,
         "failed_reason": failed_reason,
@@ -423,9 +460,7 @@ def _headers() -> Dict[str, str]:
     token = env("SPX_API_SPX_TOKEN", "").strip()
     sid = env("SPX_API_SPX_SID", "").strip()
     if not token or not sid:
-        raise ValueError(
-            "SPX API requires both SPX_API_SPX_TOKEN and SPX_API_SPX_SID."
-        )
+        raise ValueError("SPX API requires both SPX_API_SPX_TOKEN and SPX_API_SPX_SID.")
     cookie = (
         f"spx_token={token}; spx_sid={sid}; login_type=1; "
         "login_status=true; nss_sys_type=true; nss_cid=ID"
@@ -476,7 +511,9 @@ def fetch_spx_api_records(start_date: str, end_date: str) -> List[Dict[str, Any]
     start_dt = _to_datetime(start_date)
     end_dt = _to_datetime(end_date)
     if not start_dt or not end_dt:
-        raise ValueError(f"Invalid SPX API date range: start_date={start_date}, end_date={end_date}")
+        raise ValueError(
+            f"Invalid SPX API date range: start_date={start_date}, end_date={end_date}"
+        )
 
     page_size = int(os.getenv("SPX_API_PAGE_SIZE", "100"))
     max_pages = int(os.getenv("API_MAX_PAGES", "50"))
@@ -502,7 +539,9 @@ def fetch_spx_api_records(start_date: str, end_date: str) -> List[Dict[str, Any]
         }
         response = _request_page(session, api_url, _headers(), body)
         if response.status_code == 401:
-            raise RuntimeError("SPX API returned 401 Unauthorized. Refresh SPX API token and sid, then restart Airflow.")
+            raise RuntimeError(
+                "SPX API returned 401 Unauthorized. Refresh SPX API token and sid, then restart Airflow."
+            )
         response.raise_for_status()
 
         payload = response.json()

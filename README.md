@@ -240,6 +240,24 @@ otomatis di setiap push/PR ke `main`, termasuk `test_returns_mart` — CI
 menyediakan service Postgres sementara sehingga test itu benar-benar
 dieksekusi, bukan sekadar di-skip.
 
+## Code Style
+
+Format dan lint kode dengan `black` dan `ruff` (config di `pyproject.toml`).
+Setup pre-commit hook sekali di awal supaya keduanya jalan otomatis sebelum
+tiap commit:
+
+```bash
+pip install -r requirements-dev.txt
+pre-commit install
+```
+
+Jalankan manual ke semua file bila perlu:
+
+```bash
+black dags/ tests/
+ruff check --fix dags/ tests/
+```
+
 ## Public Stack
 
 Untuk mode public gunakan:

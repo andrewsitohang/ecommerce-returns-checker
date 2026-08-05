@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -105,7 +104,9 @@ def df_to_postgres(
         raise ValueError("unique_keys required for incremental upsert")
 
     key_match = " AND ".join([f't."{k}" = s."{k}"' for k in unique_keys])
-    cur.execute(f'DELETE FROM "{schema}"."{table_name}" t USING "{schema}"."{temp_table}" s WHERE {key_match}')
+    cur.execute(
+        f'DELETE FROM "{schema}"."{table_name}" t USING "{schema}"."{temp_table}" s WHERE {key_match}'
+    )
 
     target_cols = ", ".join(f'"{col}"' for col in df.columns)
     select_cols = ", ".join(f'"{col}"::{target_types[col]}' for col in df.columns)
@@ -156,7 +157,9 @@ def append_df_to_postgres(
     df.to_csv(buffer, index=False)
     buffer.seek(0)
     columns_sql = ", ".join(f'"{col}"' for col in df.columns)
-    cur.copy_expert(f'COPY "{schema}"."{table_name}" ({columns_sql}) FROM STDIN WITH CSV HEADER', buffer)
+    cur.copy_expert(
+        f'COPY "{schema}"."{table_name}" ({columns_sql}) FROM STDIN WITH CSV HEADER', buffer
+    )
     conn.commit()
     cur.close()
 
