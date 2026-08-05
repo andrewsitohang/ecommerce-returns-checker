@@ -11,7 +11,10 @@ from dags.returns_storage import ensure_schema, get_db_connection
 
 class TestReturnsMart(unittest.TestCase):
     def setUp(self) -> None:
-        self.conn = get_db_connection()
+        try:
+            self.conn = get_db_connection()
+        except (ValueError, psycopg2.OperationalError) as exc:
+            self.skipTest(f"Postgres test database not available: {exc}")
         self.schema_suffix = uuid.uuid4().hex[:8]
         self.staging_schema = f"test_staging_{self.schema_suffix}"
         self.mart_schema = f"test_mart_{self.schema_suffix}"
