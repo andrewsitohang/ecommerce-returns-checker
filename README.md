@@ -139,6 +139,13 @@ VALIDATION_MAX_SPX_NO_VALUE_RATIO=0.05
 
 `validate_returns_outputs` akan fail jika hasil pipeline terlalu sedikit, source aktif tidak mengisi data, mart kosong, atau rasio `No Value` SPX untuk `province/city/service_type` melewati threshold.
 
+### Alerting
+```env
+# ALERT_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
+```
+
+`refresh_spx_login` dan `refresh_mengantar_login` login ke UI vendor lewat browser otomatis (Playwright), bukan API resmi — jadi bisa diam-diam patah kalau vendor mengubah halaman login. Kalau `ALERT_SLACK_WEBHOOK_URL` diisi, task ini mengirim notifikasi Slack setiap kali gagal (lihat `dags/alerts.py`). Kalau kosong, kegagalan hanya tercatat di log Airflow seperti biasa. Lihat juga [Manual Credential Fallback](#manual-credential-fallback) untuk langkah darurat saat login otomatis tidak bisa diperbaiki cepat.
+
 ### Database
 ```env
 DB_HOST=postgres
@@ -165,6 +172,40 @@ Pipeline mendukung pola `*_FILE` untuk secret source dan password DB pada level 
 
 Folder lokal `./secrets` dimount ke `/opt/airflow/secrets` di container Airflow.
 Untuk stack Compose, `DB_PASSWORD_FILE` sekarang juga dipakai oleh service `postgres`, `airflow-init`, `airflow-webserver`, dan `airflow-scheduler`, jadi tidak perlu lagi mengisi `DB_PASSWORD` dengan path file.
+
+## Manual Credential Fallback
+
+SPX dan Mengantar tidak menyediakan API resmi untuk pihak eksternal, jadi
+`refresh_spx_login` dan `refresh_mengantar_login` login lewat UI web vendor
+memakai Playwright untuk mendapatkan token/cookie sesi. Ini rapuh secara
+desain: kalau vendor mengubah halaman login (ubah selector, tambah CAPTCHA,
+ganti flow 2FA, dll), task ini akan gagal terus sampai kode scraping-nya
+diperbaiki mengikuti UI baru.
+
+Sambil menunggu perbaikan kode, pipeline tetap bisa jalan dengan token/cookie
+yang diisi manual, karena `SPX_WEB_LOGIN_ENABLED` dan
+`MENGANTAR_WEB_LOGIN_ENABLED` default-nya `false` (tidak wajib pakai login
+otomatis):
+
+1. Nonaktifkan login otomatis untuk source yang bermasalah:
+   ```env
+   SPX_WEB_LOGIN_ENABLED=false
+   # atau
+   MENGANTAR_WEB_LOGIN_ENABLED=false
+   ```
+2. Login manual lewat browser biasa ke akun SPX/Mengantar, ambil token/sid
+   (SPX) atau cookie sesi (Mengantar) dari network tab / dev tools.
+3. Tulis nilainya ke file secret yang sesuai lalu restart service Airflow
+   yang relevan (`airflow-scheduler`, `airflow-webserver`) supaya env var
+   `*_FILE` terbaca ulang:
+   - `secrets/spx_token`, `secrets/spx_sid`
+   - `secrets/mengantar_api`
+4. Trigger ulang DAG `returns_api_weekly`. Task extract akan memakai
+   token/cookie manual ini sampai kamu re-enable login otomatis.
+
+Token/cookie manual ini biasanya kedaluwarsa dalam hitungan jam-hari,
+tergantung kebijakan sesi vendor — jadi ini cuma solusi sementara, bukan
+pengganti permanen untuk login otomatis yang sudah diperbaiki.
 
 ## Run
 

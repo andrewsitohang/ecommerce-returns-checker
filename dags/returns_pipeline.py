@@ -10,6 +10,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 try:
+    from alerts import notify_login_failure
     from everpro_api_source import fetch_everpro_api_payloads, normalize_everpro_api_orders
     from mengantar_api_source import fetch_mengantar_api_records
     from mengantar_login import login_and_refresh_mengantar_cookie
@@ -25,6 +26,7 @@ try:
     from spx_api_source import fetch_spx_api_records
     from spx_login import login_and_refresh_spx_cookies
 except ImportError:  # pragma: no cover - package import path for tests
+    from dags.alerts import notify_login_failure
     from dags.everpro_api_source import fetch_everpro_api_payloads, normalize_everpro_api_orders
     from dags.mengantar_api_source import fetch_mengantar_api_records
     from dags.mengantar_login import login_and_refresh_mengantar_cookie
@@ -490,6 +492,7 @@ with DAG(
     refresh_spx_login = PythonOperator(
         task_id="refresh_spx_login",
         python_callable=refresh_spx_login_if_enabled,
+        on_failure_callback=notify_login_failure,
     )
 
     extract_spx_api = PythonOperator(
@@ -505,6 +508,7 @@ with DAG(
     refresh_mengantar_login = PythonOperator(
         task_id="refresh_mengantar_login",
         python_callable=refresh_mengantar_login_if_enabled,
+        on_failure_callback=notify_login_failure,
     )
 
     extract_mengantar_api = PythonOperator(
