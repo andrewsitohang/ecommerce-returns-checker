@@ -274,7 +274,18 @@ docker compose -f docker-compose.public.yml exec -T airflow-webserver \
 `tests/test_returns_mart.py` butuh koneksi Postgres (`DB_HOST`, `DB_PORT`,
 `DB_NAME`, `DB_USER`, `DB_PASSWORD`) untuk membuat schema sementara dan
 memverifikasi hasil `refresh_returns_marts_sql`; tanpa koneksi DB, test ini
-otomatis di-skip. Test lain (mapper SPX/Everpro/Mengantar) tidak butuh DB.
+otomatis di-skip. Test lain (mapper SPX/Everpro/Mengantar, plus
+`tests/test_returns_pipeline.py` untuk `extract_*_raw`,
+`build_returns_reporting_tables`, dan `validate_returns_outputs`) memakai
+mock untuk DB/API sehingga tidak butuh koneksi apapun.
+
+`dags/returns_pipeline.py` meng-import `airflow` di level modul, padahal
+`apache-airflow` sendiri tidak ada di `requirements-airflow.txt` (paket itu
+berat dan biasanya sudah tersedia lewat image Docker Airflow). Supaya test
+tetap bisa jalan di luar container, `tests/conftest.py` menyuntikkan stub
+minimal untuk `airflow.DAG`/`airflow.operators.python.PythonOperator` bila
+`import airflow` gagal — stub ini otomatis dilewati kalau Airflow beneran
+terpasang (mis. saat test dijalankan di dalam container).
 
 CI (`.github/workflows/tests.yml`) menjalankan seluruh test suite ini
 otomatis di setiap push/PR ke `main`, termasuk `test_returns_mart` — CI
