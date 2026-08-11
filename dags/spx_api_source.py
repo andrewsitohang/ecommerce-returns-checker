@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -229,6 +230,12 @@ def _payload_total(payload: Any) -> Optional[int]:
         return None
 
 
+def _contains_word(text: str, keywords: Any) -> bool:
+    # Word-boundary match instead of plain substring: "delivered" must not match
+    # inside "undelivered", the way `"delivered" in "undelivered"` would.
+    return any(re.search(rf"\b{re.escape(keyword)}\b", text) for keyword in keywords)
+
+
 def _infer_return_flag_and_reason(
     status_text: str,
     failed_reason: str,
@@ -238,19 +245,19 @@ def _infer_return_flag_and_reason(
     status_lower = status_text.lower()
     reason_text = f"{failed_reason} {delay_reason}".lower()
 
-    if any(key in f"{status_lower} {reason_text}" for key in CANCEL_KEYWORDS):
+    if _contains_word(f"{status_lower} {reason_text}", CANCEL_KEYWORDS):
         return 0, "Cancelled"
-    if any(status in status_lower for status in DELIVERED_STATUSES):
+    if _contains_word(status_lower, DELIVERED_STATUSES):
         return 0, "No Reason Provided"
     if (
         bool(returned_at)
-        or any(status in status_lower for status in RETURN_STATUSES)
-        or "return" in status_lower
+        or _contains_word(status_lower, RETURN_STATUSES)
+        or _contains_word(status_lower, {"return"})
     ):
         return 1, failed_reason or delay_reason or status_text or "No Reason Provided"
-    if any(status in status_lower for status in FAILED_FINAL_STATUSES):
+    if _contains_word(status_lower, FAILED_FINAL_STATUSES):
         return 1, failed_reason or delay_reason or status_text or "No Reason Provided"
-    is_in_progress = any(status in status_lower for status in IN_PROGRESS_STATUSES)
+    is_in_progress = _contains_word(status_lower, IN_PROGRESS_STATUSES)
     if failed_reason and not is_in_progress:
         return 1, failed_reason
     if failed_reason:

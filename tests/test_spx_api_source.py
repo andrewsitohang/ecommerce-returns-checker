@@ -81,6 +81,31 @@ class TestSpxApiSource(unittest.TestCase):
         self.assertEqual(normalized["return_flag"], 0)
         self.assertEqual(normalized["return_reason"], "No Reason Provided")
 
+    def test_infer_return_flag_does_not_match_delivered_inside_undelivered(self) -> None:
+        # "Undelivered" contains "delivered" as a substring; a plain `in`
+        # check would misclassify it as a successful delivery instead of a
+        # failed/return outcome.
+        return_flag, reason = spx_api_source._infer_return_flag_and_reason(
+            status_text="Undelivered",
+            failed_reason="Alamat tidak ditemukan",
+            delay_reason="",
+            returned_at=None,
+        )
+
+        self.assertEqual(return_flag, 1)
+        self.assertEqual(reason, "Alamat tidak ditemukan")
+
+    def test_infer_return_flag_matches_delivered_status(self) -> None:
+        return_flag, reason = spx_api_source._infer_return_flag_and_reason(
+            status_text="Delivered",
+            failed_reason="",
+            delay_reason="",
+            returned_at=None,
+        )
+
+        self.assertEqual(return_flag, 0)
+        self.assertEqual(reason, "No Reason Provided")
+
 
 if __name__ == "__main__":
     unittest.main()
