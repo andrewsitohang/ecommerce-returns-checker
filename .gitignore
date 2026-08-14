@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.public.example
+!.env.staging.example
 !.env.example
 
 # Airflow runtime artifacts

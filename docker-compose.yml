@@ -20,11 +20,11 @@ x-airflow-common: &airflow-common
 services:
   postgres:
     image: postgres:16
-    env_file: .env
+    env_file: ${ENV_FILE:-.env}
     entrypoint: ["/bin/bash", "/opt/project-scripts/postgres-with-db-password.sh"]
     command: ["postgres"]
     ports:
-      - "5444:5432"
+      - "${POSTGRES_HOST_PORT:-5444}:5432"
     volumes:
       - ./scripts:/opt/project-scripts:ro
       - ./secrets:/opt/airflow/secrets:ro
@@ -38,17 +38,17 @@ services:
 
   airflow-init:
     <<: *airflow-common
-    env_file: .env
+    env_file: ${ENV_FILE:-.env}
     entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
     command: ["/bin/bash", "-lc", "airflow db migrate && airflow users create --username ${AIRFLOW_ADMIN_USER:-airflow} --password ${AIRFLOW_ADMIN_PASSWORD:-airflow} --firstname Air --lastname Flow --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com}"]
 
   airflow-webserver:
     <<: *airflow-common
-    env_file: .env
+    env_file: ${ENV_FILE:-.env}
     entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
     command: ["airflow", "webserver"]
     ports:
-      - "8080:8080"
+      - "${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
@@ -61,7 +61,7 @@ services:
 
   airflow-scheduler:
     <<: *airflow-common
-    env_file: .env
+    env_file: ${ENV_FILE:-.env}
     entrypoint: ["/bin/bash", "/opt/project-scripts/airflow-with-db-password.sh"]
     command: ["airflow", "scheduler"]
     restart: always

@@ -221,6 +221,37 @@ docker compose up -d
 
 3. Trigger DAG `returns_api_weekly` dari Airflow UI atau CLI.
 
+## Environments
+
+Selama ini semuanya jalan di satu server lewat satu `.env` — tidak ada
+staging terpisah, jadi perubahan DAG langsung diuji coba di server yang sama
+dengan yang menyimpan data production. Untuk mengurangi risiko itu tanpa
+perlu server kedua:
+
+- **Production**: tetap seperti biasa — `.env` + `docker-compose.public.yml`
+  atau `docker-compose.aws.yml` (yang jalan di server/EC2).
+- **Staging**: pakai `docker-compose.yml` (stack lokal tanpa Caddy) dengan
+  file env terpisah, dijalankan sebagai project Compose terpisah supaya
+  container/network/volume-nya tidak pernah bersinggungan dengan production:
+
+  ```bash
+  cp .env.staging.example .env.staging   # isi dengan value asli
+  docker compose --env-file .env.staging -p returns-staging up airflow-init
+  docker compose --env-file .env.staging -p returns-staging up -d
+  ```
+
+  `-p returns-staging` membuat Compose menamai ulang semua container, network,
+  dan volume Postgres dengan prefix itu, dan `.env.staging` mengarahkan
+  `DB_NAME` ke database terpisah (`returns_db_staging`) — jadi walaupun jalan
+  di server yang sama, staging tidak bisa menimpa data atau container
+  production. Bandingkan hasil DAG di staging dulu sebelum sync perubahan
+  kode ke `.env`/server production.
+
+  Matikan staging setelah selesai supaya tidak makan resource server terus:
+  ```bash
+  docker compose --env-file .env.staging -p returns-staging down
+  ```
+
 ## Data Quality Validation
 
 `validate_returns_outputs` di `dags/returns_pipeline.py` menjalankan
