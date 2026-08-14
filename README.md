@@ -252,6 +252,18 @@ perlu server kedua:
   docker compose --env-file .env.staging -p returns-staging down
   ```
 
+Setelah perubahan diuji di staging dan siap naik ke production, jalankan
+`scripts/deploy.sh` langsung di server production. Skrip ini otomatis
+mendeteksi compose file mana yang sedang jalan (`docker-compose.aws.yml`
+atau `docker-compose.public.yml`), `git pull`, lalu restart
+`airflow-scheduler`/`airflow-webserver` saja — tanpa rebuild image (karena
+`dags/` di-mount sebagai volume) dan tanpa menyentuh Postgres/Metabase yang
+sedang jalan:
+
+```bash
+scripts/deploy.sh
+```
+
 ## Data Quality Validation
 
 `validate_returns_outputs` di `dags/returns_pipeline.py` menjalankan
