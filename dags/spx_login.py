@@ -116,9 +116,11 @@ def login_and_refresh_spx_cookies() -> None:
             # Navigate to the tracking page first and let SPX's own auth redirect
             # take us to whatever the current login URL actually is, rather than
             # hardcoding a login URL that can go stale when SPX changes its routes.
-            page.goto(tracking_url, wait_until="networkidle", timeout=timeout_ms)
-            # The redirect to the login page is client-side JS that can fire a
-            # moment after the network goes idle; give it a beat before checking.
+            # SPX's admin dashboard keeps background polling/analytics requests
+            # running indefinitely, so wait_until="networkidle" never resolves
+            # there; wait for the DOM instead and give client-side redirects a
+            # beat to fire.
+            page.goto(tracking_url, wait_until="domcontentloaded", timeout=timeout_ms)
             page.wait_for_timeout(3000)
 
             if _page_contains_any_text(page, ["Untuk login Staf"]):
@@ -132,7 +134,7 @@ def login_and_refresh_spx_cookies() -> None:
             except Exception:
                 # The natural redirect didn't land on a recognizable login form —
                 # fall back to the explicitly configured login URL.
-                page.goto(login_url, wait_until="networkidle", timeout=timeout_ms)
+                page.goto(login_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_timeout(2000)
                 try:
                     username_locator = _wait_for_first_visible(page, username_selectors, timeout_ms)
@@ -150,7 +152,8 @@ def login_and_refresh_spx_cookies() -> None:
             submit_locator.click()
 
             page.wait_for_url(lambda url: not _is_login_url(url), timeout=timeout_ms)
-            page.goto(tracking_url, wait_until="networkidle", timeout=timeout_ms)
+            page.goto(tracking_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.wait_for_timeout(3000)
 
             cookies = {cookie["name"]: cookie["value"] for cookie in context.cookies()}
             spx_token = cookies.get("spx_token")
